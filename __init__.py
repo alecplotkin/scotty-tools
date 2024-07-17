@@ -1,1 +1,1 @@
-from src.sctrat import models, tools
+from src.sctrat import models, tools, plotting
