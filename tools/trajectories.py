@@ -2,7 +2,9 @@ import anndata as ad
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from typing import Tuple
+from typing import Tuple, Union, Literal
+from src.sctrat.models.trajectory import OTModel
+from src.sctrat.utils import window
 
 
 class TrajectoryMixIn(ad.AnnData):
@@ -28,9 +30,11 @@ class SubsetTrajectory(TrajectoryMixIn):
         self,
         trajectory: ad.AnnData,
         ref_time: float,
+        norm_strategy: Literal['joint', 'expected_value'],
         time_var: str = 'day',
     ):
         super().__init__(trajectory, ref_time, time_var)
+        self.norm_strategy = norm_strategy
 
 
 class GeneTrajectory(TrajectoryMixIn):
@@ -142,3 +146,65 @@ class GeneTrajectory(TrajectoryMixIn):
         rep = super().__repr__()
         rep += f"\n    subset_var: '{self.subset_var}'"
         return rep
+
+
+# TODO: work on normalization behavior.
+def compute_trajectories(
+        ot_model: OTModel,
+        subsets: Union[pd.Series, pd.DataFrame, npt.NDArray],
+        ref_time: int,
+        use_ancestor_growth: bool = True,
+        normalize: bool = True,
+        norm_strategy: Literal['joint', 'expected_value'] = 'joint',
+) -> ad.AnnData:
+
+    ix_day = ot_model.meta.index[ot_model.meta[ot_model.time_var] == ref_time]
+    if isinstance(subsets, pd.Series):
+        subsets = pd.get_dummies(subsets[ix_day], dtype=float)
+    elif isinstance(subsets, pd.DataFrame):
+        subsets = subsets.loc[ix_day, :].astype(float)
+    elif subsets.shape[0] != len(ix_day):
+        raise ValueError(
+            'subsets and model have different number of cells at ref_time'
+        )
+    traj = ad.AnnData(subsets)
+    norm_to_days = True if norm_strategy == 'expected_value' else False
+    if normalize and not norm_to_days:
+        traj.X = traj.X / traj.shape[0]
+    traj_by_tp = {ref_time: traj.copy()}
+
+    # # Get ancestor trajectories starting with ref_time.
+    ancestor_days = [tp for tp in ot_model.timepoints if tp <= ref_time]
+    ancestor_day_pairs = window(ancestor_days, k=2)
+    for t0, t1 in ancestor_day_pairs[::-1]:
+        traj = ot_model.pull_back(traj, t0, t1, normalize=False)
+        # TODO: abstract this into a static method...
+        if normalize:
+            norm_factor = traj.shape[0] if norm_to_days else 1
+            traj.X = traj.X / traj.X.sum(keepdims=True) * norm_factor
+        traj_by_tp[t0] = traj.copy()
+
+    # Get descendant trajectories starting with ref_time.
+    traj = traj_by_tp[ref_time]  # reset traj back to ref_time
+    descendant_days = [tp for tp in ot_model.timepoints if tp >= ref_time]
+    descendant_day_pairs = window(descendant_days, k=2)
+    for t0, t1 in descendant_day_pairs:
+        traj = ot_model.push_forward(traj, t0, t1, normalize=False)
+        if normalize:
+            norm_factor = traj.shape[0] if norm_to_days else 1
+            traj.X = traj.X / traj.X.sum(keepdims=True) * norm_factor
+        traj_by_tp[t1] = traj.copy()
+
+    # Combine all trajectories into single SubsetTrajectory object
+    traj = SubsetTrajectory(
+        ad.concat(
+            traj_by_tp.values(),
+            axis=0,
+            keys=traj_by_tp.keys(),
+            label=ot_model.time_var,
+        ),
+        ref_time=ref_time,
+        norm_strategy=norm_strategy,
+        time_var=ot_model.time_var
+    )
+    return traj
