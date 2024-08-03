@@ -1,7 +1,7 @@
 import anndata as ad
 import numpy as np
 import pandas as pd
-from typing import Union, Literal
+from typing import Union, Literal, Dict
 from src.sctrat.models.trajectory import OTModel
 
 
@@ -54,12 +54,19 @@ from src.sctrat.models.trajectory import OTModel
 #     return results
 
 
+def compute_cluster_entropy(df: pd.DataFrame) -> float:
+    p = df.sum(axis=0) / df.shape[0]
+    p = p[p != 0]
+    return -np.sum(p * np.log(p))
+
+
 # TODO: Allow day_pair to be specified.
 def compute_trajectory_entropy(
     ot_model: OTModel,
     # day_pair: Tuple[float, float],
     direction: Literal['forward', 'backward'] = 'forward',
     subsets: Union[pd.Series, pd.DataFrame] = None,
+    compute_ratio: bool = True,
 ) -> pd.Series:
     """Compute trajectory entropy with respect to subsets."""
 
@@ -95,6 +102,11 @@ def compute_trajectory_entropy(
 
         fates = traj.X / traj.X.sum(1, keepdims=True)
         entropy = -np.sum(fates * np.log(fates), axis=1)
+        if compute_ratio:
+            growth = traj.X.sum(0)
+            weights = growth / growth.sum()
+            expected_entropy = -np.sum(weights * np.log(weights))
+            entropy = entropy / expected_entropy
         results.append(pd.Series(entropy, index=traj.obs_names))
     results = pd.concat(results, axis=0)
     return results

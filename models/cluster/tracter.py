@@ -1,15 +1,29 @@
+import logging
 import anndata as ad
 import numpy as np
 import pandas as pd
 from typing import Dict
 from time import perf_counter
+from sketchKH import sketch
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.mixture import GaussianMixture
+# from src.sctrat.logging import logger
 from src.sctrat.models.trajectory import (
     OTModel, coarsen_ot_model
 )
 from src.sctrat.tools.trajectories import compute_trajectories
+from copy import copy
+
+
+logger = logging.getLogger('tracter')
+logger.handlers.clear()
+handler = logging.StreamHandler()
+handler.setFormatter(
+    logging.Formatter("%(asctime)s:%(name)s:%(levelname)s:%(message)s")
+)
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
 
 
 class TRACTER:
@@ -34,42 +48,44 @@ class TRACTER:
         n_clusters: int = 10,
         n_subsamples: int = 200,
         random_state: int = None,
+        scale_trajectory_reps: bool = True,
     ):
         self.rep_dims = rep_dims
         self.n_clusters = n_clusters
         self.n_subsamples = n_subsamples
         self.random_state = random_state
+        self.scale_trajectory_reps = scale_trajectory_reps
 
     def fit(self, model: OTModel, data: ad.AnnData):
         """Fit TRACTER using trajectory model and single-cell data."""
 
         self.time_var = model.time_var
-        print('Fitting time point embeddings...')
-        start = perf_counter()
-        self.ix_train = self.get_training_ix(
-            model,
-            n_subsamples=self.n_subsamples,
-            random_state=self.random_state,
+        logger.info('Fitting time point embeddings...')
+        _, data_train = sketch(
+            data,
+            sample_set_key=self.time_var,
+            num_subsamples=self.n_subsamples,
+            frequency_seed=self.random_state,
         )
-        self.embedding_models = self.fit_embeddings(data, self.ix_train)
+        self.ix_train = data_train.obs_names
+        self.embedding_models = self.fit_embeddings(data[self.ix_train])
         timepoint_embeddings = self.embed_data(data)
-        stop = perf_counter()
-        print(f'Done in {stop - start:.1f}s')
-        print('Computing trajectory representations...')
-        start = perf_counter()
-        self.trajectory_matrix = self.compute_trajectory_matrix(
+        logger.info('Done')
+
+        logger.info('Computing trajectory representations...')
+        trajectory_matrix = self.compute_trajectory_matrix(
                 model, timepoint_embeddings
         )
-        stop = perf_counter()
-        print(f'Done in {stop - start:.1f}s')
-        print('Fitting trajectory clusters...')
-        start = perf_counter()
-        self.cluster_model = self.fit_clusters(
-            self.trajectory_matrix,
-            ix_train=np.concatenate(list(self.ix_train.values()), axis=0),
+        self.trajectory_matrix = trajectory_matrix
+        logger.info('Done')
+
+        logger.info('Fitting trajectory clusters...')
+        cluster_model = self.fit_clusters(
+            trajectory_matrix[self.ix_train],
+            scale_trajectory_reps=self.scale_trajectory_reps,
         )
-        stop = perf_counter()
-        print(f'Done in {stop - start:.1f}s')
+        self.cluster_model = cluster_model
+        logger.info('Done')
 
     def predict(self, data: ad.AnnData) -> pd.Series:
         """Predict trajectory cluster assignments for data."""
@@ -94,24 +110,24 @@ class TRACTER:
             training_ix[day] = ix_
         return training_ix
 
-    def fit_embeddings(self, data: ad.AnnData, ix_tp: Dict) -> Dict:
+    def fit_embeddings(self, data: ad.AnnData) -> Dict:
         """Fit time point embeddings using a GMM.
 
         Args:
             data (ad.AnnData): data to fit embeddings on.
-            ix_tp (Dict[pd.Index]): dict of indices to train on for each tp.
 
         Returns:
             dict: dictionary of fitted time point GMMs.
         """
 
         model_dict = dict()
-        for tp, ix in ix_tp.items():
+        for time, df in data.obs.groupby(self.time_var):
+            X = data[df.index].obsm['X_pca']
             model = GaussianMixture(
                 n_components=self.rep_dims, random_state=self.random_state
             )
-            model.fit(data[ix].obsm['X_pca'])
-            model_dict[tp] = model
+            model.fit(X)
+            model_dict[time] = model
         return model_dict
 
     def embed_data(self, data: ad.AnnData) -> Dict:
@@ -157,15 +173,20 @@ class TRACTER:
         )
         return traj_matrix
 
-    def fit_clusters(self, trajectory_matrix, ix_train):
+    def fit_clusters(
+            self,
+            trajectory_matrix: ad.AnnData,
+            scale_trajectory_reps: bool = True,
+    ) -> Pipeline:
         """Fit clusters on trajectory representations."""
-        X = trajectory_matrix[ix_train, :].to_df()
-        model = Pipeline([
-            ('scaler', StandardScaler()),
-            ('cluster', GaussianMixture(
+        X = trajectory_matrix.to_df()
+        pipeline_steps = []
+        if scale_trajectory_reps:
+            pipeline_steps.append(('scaler', StandardScaler()))
+        pipeline_steps.append(('cluster', GaussianMixture(
                 n_components=self.n_clusters, random_state=self.random_state
-            ))
-        ])
+            )))
+        model = Pipeline(pipeline_steps)
         model.fit(X)
         return model
 
@@ -332,17 +353,8 @@ def prune_tracter_model(
 ) -> TRACTER:
     """Prune the cluster model to use only the top clusters."""
 
-    # Initialize new TRACTER object with same metadata as old.
-    tracter_pruned = TRACTER(
-        rep_dims=tracter.rep_dims,
-        n_clusters=n_clusters_pruned,
-        n_subsamples=tracter.n_subsamples,
-        random_state=tracter.random_state,
-    )
-    tracter_pruned.time_var = tracter.time_var
-    tracter_pruned.ix_train = tracter.ix_train
-    tracter_pruned.embedding_models = tracter.embedding_models
-    tracter_pruned.trajectory_matrix = tracter.trajectory_matrix
+    tracter_pruned = copy(tracter)
+    tracter_pruned.n_clusters = n_clusters_pruned
 
     # Get params for top clusters from old model so we can use a warm start.
     cluster_counts = pd.value_counts(clusters)
@@ -352,19 +364,22 @@ def prune_tracter_model(
     weights_init = weights_init / weights_init.sum()
     means_init = gmm.means_[ix_keep, :]
     precisions_init = gmm.precisions_[ix_keep, :, :]
-    gmm_pruned = Pipeline([
-        ('scaler', StandardScaler()),
-        ('cluster', GaussianMixture(
+
+    pipeline_steps = []
+    if tracter_pruned.scale_trajectory_reps:
+        pipeline_steps.append(('scaler', StandardScaler()))
+    pipeline_steps.append(('cluster', GaussianMixture(
             n_components=n_clusters_pruned,
             random_state=tracter.random_state,
             weights_init=weights_init,
             means_init=means_init,
             precisions_init=precisions_init,
-        ))
-    ])
+        )
+    ))
+    gmm_pruned = Pipeline(pipeline_steps)
 
     # Fit new clusters starting from top old clusters.
-    ix_train = np.concatenate(list(tracter_pruned.ix_train.values()), axis=0)
+    ix_train = tracter_pruned.ix_train
     X = tracter_pruned.trajectory_matrix[ix_train, :].to_df()
     gmm_pruned.fit(X)
     tracter_pruned.cluster_model = gmm_pruned
