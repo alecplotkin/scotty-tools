@@ -2,11 +2,12 @@ import logging
 import anndata as ad
 import numpy as np
 import pandas as pd
-from typing import Dict
+from typing import Dict, Literal
+from tqdm import tqdm
 from time import perf_counter
 from sketchKH import sketch
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.mixture import GaussianMixture
 # from src.sctrat.logging import logger
 from src.sctrat.models.trajectory import (
@@ -48,19 +49,23 @@ class TRACTER:
         n_clusters: int = 10,
         n_subsamples: int = 200,
         random_state: int = None,
+        log_trajectory_reps: bool = True,
         scale_trajectory_reps: bool = True,
+        norm_strategy: Literal['joint', 'expected_value'] = 'expected_value',
     ):
         self.rep_dims = rep_dims
         self.n_clusters = n_clusters
         self.n_subsamples = n_subsamples
         self.random_state = random_state
+        self.log_trajectory_reps = log_trajectory_reps
         self.scale_trajectory_reps = scale_trajectory_reps
+        self.norm_strategy = norm_strategy
 
     def fit(self, model: OTModel, data: ad.AnnData):
         """Fit TRACTER using trajectory model and single-cell data."""
 
         self.time_var = model.time_var
-        logger.info('Fitting time point embeddings...')
+        logger.info('Subsampling data...')
         _, data_train = sketch(
             data,
             sample_set_key=self.time_var,
@@ -68,24 +73,24 @@ class TRACTER:
             frequency_seed=self.random_state,
         )
         self.ix_train = data_train.obs_names
+
+        logger.info('Fitting time point embeddings...')
         self.embedding_models = self.fit_embeddings(data[self.ix_train])
         timepoint_embeddings = self.embed_data(data)
-        logger.info('Done')
 
         logger.info('Computing trajectory representations...')
         trajectory_matrix = self.compute_trajectory_matrix(
-                model, timepoint_embeddings
+                model, timepoint_embeddings, norm_strategy=self.norm_strategy
         )
         self.trajectory_matrix = trajectory_matrix
-        logger.info('Done')
 
         logger.info('Fitting trajectory clusters...')
         cluster_model = self.fit_clusters(
             trajectory_matrix[self.ix_train],
+            log_trajectory_reps=self.log_trajectory_reps,
             scale_trajectory_reps=self.scale_trajectory_reps,
         )
         self.cluster_model = cluster_model
-        logger.info('Done')
 
     def predict(self, data: ad.AnnData) -> pd.Series:
         """Predict trajectory cluster assignments for data."""
@@ -121,7 +126,7 @@ class TRACTER:
         """
 
         model_dict = dict()
-        for time, df in data.obs.groupby(self.time_var):
+        for time, df in tqdm(data.obs.groupby(self.time_var)):
             X = data[df.index].obsm['X_pca']
             model = GaussianMixture(
                 n_components=self.rep_dims, random_state=self.random_state
@@ -150,19 +155,24 @@ class TRACTER:
             embedding_dict[tp] = rep
         return embedding_dict
 
-    def compute_trajectory_matrix(self, ot_model: OTModel, timepoint_embeddings: Dict):
+    def compute_trajectory_matrix(
+            self,
+            ot_model: OTModel,
+            timepoint_embeddings: Dict,
+            norm_strategy: Literal['joint', 'expected_value'] = 'expected_value',
+    ) -> ad.AnnData:
         """Compute matrix of trajectories with all timepoints."""
 
         # Need to get subset names from coarsened ot_model in order for
         # trajectory var_names to make sense.
         meta = ot_model.meta
         traj_by_ref_tp = dict()
-        for tp in ot_model.timepoints:
+        for tp in tqdm(ot_model.timepoints):
             ix_day = meta.index[meta[self.time_var] == tp]
             emb = timepoint_embeddings[tp].loc[ix_day, :]
             traj = compute_trajectories(
                 ot_model, emb, ref_time=tp,
-                normalize=True,  norm_strategy='expected_value',
+                normalize=True,  norm_strategy=norm_strategy,
             )
             traj_by_ref_tp[tp] = traj
         traj_matrix = ad.concat(
@@ -176,11 +186,16 @@ class TRACTER:
     def fit_clusters(
             self,
             trajectory_matrix: ad.AnnData,
+            log_trajectory_reps: bool = True,
             scale_trajectory_reps: bool = True,
     ) -> Pipeline:
         """Fit clusters on trajectory representations."""
         X = trajectory_matrix.to_df()
         pipeline_steps = []
+        if log_trajectory_reps:
+            pipeline_steps.append(
+                ('log_transform', FunctionTransformer(np.log1p, validate=True))
+            )
         if scale_trajectory_reps:
             pipeline_steps.append(('scaler', StandardScaler()))
         pipeline_steps.append(('cluster', GaussianMixture(

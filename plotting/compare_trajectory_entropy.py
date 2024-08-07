@@ -12,6 +12,7 @@ def compare_trajectory_entropy(
         ot_model: OTModel,
         groupings: List[str],
         compute_ratio: bool = True,
+        showfliers: bool = True,
 ):
     results = dict()
     for grouping in groupings:
@@ -38,8 +39,8 @@ def compare_trajectory_entropy(
     ).reset_index(level='grouping').merge(
         adata.obs['day'], how='left', left_index=True, right_index=True
     ).set_index('grouping', append=True)
-    sns.boxplot(df, x='day', hue='grouping', y='entropy_fwd')
+    sns.boxplot(df, x='day', hue='grouping', y='entropy_fwd', showfliers=showfliers)
     plt.show()
-    sns.boxplot(df, x='day', hue='grouping', y='entropy_bwd')
+    sns.boxplot(df, x='day', hue='grouping', y='entropy_bwd', showfliers=showfliers)
     plt.show()
     return None
