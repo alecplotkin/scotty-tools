@@ -163,8 +163,6 @@ class TRACTER:
     ) -> ad.AnnData:
         """Compute matrix of trajectories with all timepoints."""
 
-        # Need to get subset names from coarsened ot_model in order for
-        # trajectory var_names to make sense.
         meta = ot_model.meta
         traj_by_ref_tp = dict()
         for tp in tqdm(ot_model.timepoints):

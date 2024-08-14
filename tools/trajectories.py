@@ -36,6 +36,14 @@ class SubsetTrajectory(TrajectoryMixIn):
         super().__init__(trajectory, ref_time, time_var)
         self.norm_strategy = norm_strategy
 
+    def __getitem__(self, index):
+        subset = super().__getitem__(index)
+        return GeneTrajectory(
+            subset.to_memory(),
+            ref_time=self.ref_time,
+            time_var=self.time_var,
+        )
+
 
 class GeneTrajectory(TrajectoryMixIn):
     def __init__(
@@ -48,6 +56,18 @@ class GeneTrajectory(TrajectoryMixIn):
         super().__init__(trajectory, ref_time, time_var)
         self.subset_var = subset_var
 
+    def __getitem__(self, index):
+        subset = super().__getitem__(index)
+        return GeneTrajectory(
+            subset.to_memory(),
+            ref_time=self.ref_time,
+            time_var=self.time_var,
+            subset_var=self.subset_var,
+        )
+
+    def compare_means(self) -> pd.DataFrame:
+        ...
+
     @staticmethod
     def from_subset_trajectory(
         trajectory: SubsetTrajectory,
@@ -58,14 +78,14 @@ class GeneTrajectory(TrajectoryMixIn):
         X = features.to_df()
         if layer is not None:
             X.loc[:, :] = features.layers[layer]
-        means, vars, obs = GeneTrajectory.compute_tractory_stats(
+        means, stds, obs = GeneTrajectory.compute_tractory_stats(
             trajectory, X, subset_var=subset_var
         )
         gene_trajectory = ad.AnnData(
             X=means,
             obs=obs,
             var=features.var,
-            layers={'vars': vars}
+            layers={'std': stds}
         )
         gene_trajectory = GeneTrajectory(
             gene_trajectory, ref_time=trajectory.ref_time,
@@ -82,20 +102,20 @@ class GeneTrajectory(TrajectoryMixIn):
         """Compute trajectory-weighted expression stats at each timepoint."""
 
         means = dict()
-        vars = dict()
+        stdvs = dict()
         nobs = dict()
         for tp, df in trajectory.obs.groupby(trajectory.time_var):
-            # TODO: make sig2 conditional on normalization of trajectory?
+            # TODO: make sig conditional on normalization of trajectory?
             # i.e. to test effect of different effective population sizes.
-            mu, sig2 = GeneTrajectory._compute_weighted_stats(
+            mu, sig = GeneTrajectory._compute_weighted_stats(
                 trajectory[df.index].X.T,
                 features.loc[df.index, :].to_numpy()
             )
             means[tp] = pd.DataFrame(
                 mu, index=trajectory.var_names, columns=features.columns
             )
-            vars[tp] = pd.DataFrame(
-                sig2, index=trajectory.var_names, columns=features.columns
+            stdvs[tp] = pd.DataFrame(
+                sig, index=trajectory.var_names, columns=features.columns
             )
             # TODO: make nobs conditional on normalization of trajectory?
             # i.e. to test effect of different effective population sizes.
@@ -103,19 +123,19 @@ class GeneTrajectory(TrajectoryMixIn):
             nobs[tp]['nobs'] = len(df.index)
 
         means = np.concatenate(list(means.values()), axis=0)
-        vars = np.concatenate(list(vars.values()), axis=0)
+        stdvs = np.concatenate(list(stdvs.values()), axis=0)
         nobs = pd.concat(
             nobs.values(), axis=0,
             keys=nobs.keys(),
         ).reset_index(names=[trajectory.time_var, subset_var])
-        return means, vars, nobs
+        return means, stdvs, nobs
 
     @staticmethod
     def _compute_weighted_stats(
             W: npt.NDArray,
             X: npt.NDArray
     ) -> Tuple[npt.NDArray, npt.NDArray]:
-        """Compute weighted mean and variance of gene expression.
+        """Compute weighted mean and standard deviation of gene expression.
 
         Uses the sample sizes at the starting time point to compute the
         variance, with Bessel bias correction.
@@ -126,7 +146,7 @@ class GeneTrajectory(TrajectoryMixIn):
 
         Returns:
             (np.ndarray, np.ndarray): subsets by features arrays of means and
-                variances.
+                std deviations.
 
         TODOs:
             Double check assumptions about sample size... it may be possible to
@@ -139,8 +159,8 @@ class GeneTrajectory(TrajectoryMixIn):
         mu = W @ X
         Xm = X[np.newaxis, :, :] - mu[:, np.newaxis, :]
         sig2 = W[:, np.newaxis, :] @ (Xm**2) / (W.shape[1] - 1)
-        sig2 = np.squeeze(sig2, axis=1)
-        return mu, sig2
+        sig = np.sqrt(np.squeeze(sig2, axis=1))
+        return mu, sig
 
     def __repr__(self):
         rep = super().__repr__()
@@ -195,6 +215,9 @@ def compute_trajectories(
             traj.X = traj.X / traj.X.sum(keepdims=True) * norm_factor
         traj_by_tp[t1] = traj.copy()
 
+    # Time points must be sorted before concatenating, otherwise will be in
+    # order they were added.
+    traj_by_tp = {key: traj_by_tp[key] for key in sorted(traj_by_tp.keys())}
     # Combine all trajectories into single SubsetTrajectory object
     traj = SubsetTrajectory(
         ad.concat(

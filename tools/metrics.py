@@ -1,8 +1,10 @@
 import anndata as ad
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from typing import Union, Literal, Dict
 from src.sctrat.models.trajectory import OTModel
+from src.sctrat.tools.trajectories import SubsetTrajectory
 
 
 # # TODO: Allow day_pair to be specified.
@@ -110,3 +112,21 @@ def compute_trajectory_entropy(
         results.append(pd.Series(entropy, index=traj.obs_names))
     results = pd.concat(results, axis=0)
     return results
+
+
+def calculate_trajectory_divergence(
+        traj: SubsetTrajectory,
+        sub1: str,
+        sub2: str,
+) -> npt.NDArray:
+    """Calculate Jensen-Shannon divergence between 2 subsets' trajectories."""
+    js_div = []
+    for day, df in traj.obs.groupby(traj.time_var):
+        X = traj[df.index].X
+        X = X / X.sum(0, keepdims=True)
+        p1 = X[:, traj.var_names == sub1]
+        p2 = X[:, traj.var_names == sub2]
+        kl1 = np.sum(p1 * np.log(p1) - p1 * np.log(p2))
+        kl2 = np.sum(p2 * np.log(p2) - p2 * np.log(p1))
+        js_div.append(kl1/2 + kl2/2)
+    return np.array(js_div)
