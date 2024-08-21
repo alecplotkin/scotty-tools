@@ -7,55 +7,6 @@ from src.sctrat.models.trajectory import OTModel
 from src.sctrat.tools.trajectories import SubsetTrajectory
 
 
-# # TODO: Allow day_pair to be specified.
-# def compute_trajectory_entropy(
-#     ot_model: OTModel,
-#     # day_pair: Tuple[float, float],
-#     subsets: Union[pd.Series, pd.DataFrame] = None,
-# ) -> pd.Series:
-#     """Compute trajectory entropy with respect to subsets."""
-# 
-#     if subsets is not None:
-#         if isinstance(subsets, pd.Series):
-#             subsets = pd.get_dummies(subsets).astype(float)
-#         elif isinstance(subsets, pd.DataFrame):
-#             subsets = subsets.astype(float)
-#         # AnnData will send a warning if var_names are not str.
-#         subsets.columns = subsets.columns.astype(str)
-# 
-#     results = []
-#     for t0, t1 in ot_model.day_pairs:
-#         ix_t1 = ot_model.meta.index[ot_model.meta[ot_model.time_var] == t1]
-#         if subsets is not None:
-#             s1 = ad.AnnData(subsets.loc[ix_t1, :])
-#             s1 = s1[:, s1.X.sum(0) > 0]
-#             traj = ot_model.pull_back(s1, t0, t1, normalize=True, norm_axis=0)
-#         else:
-#             traj = ot_model.get_coupling(t0, t1)
-#             traj.X = traj.X / traj.X.sum(0, keepdims=True)
-# 
-#         fates = traj.X / traj.X.sum(1, keepdims=True)
-# 
-#         # # this corrects for maximum possible entropy
-#         # norm_factor = np.log(traj.shape[1])
-#         # entropy = -np.sum(fates * np.log(fates), axis=1) / norm_factor
-# 
-#         # # This corrects for relative sizes of clusters.
-#         # cluster_weights = s1.X.sum(0, keepdims=True) / s1.X.sum()
-#         # entropy = -np.sum(cluster_weights * fates * np.log(fates), axis=1)
-# 
-#         # # This corrects for relative growth rates of cells.
-#         # weights = traj.X.sum(1)
-#         # entropy = weights * -np.sum(fates * np.log(fates), axis=1)
-# 
-#         # This is the un-adjusted entropy.
-#         entropy = -np.sum(fates * np.log(fates), axis=1)
-# 
-#         results.append(pd.Series(entropy, index=traj.obs_names))
-#     results = pd.concat(results, axis=0)
-#     return results
-
-
 def compute_cluster_entropy(df: pd.DataFrame) -> float:
     p = df.sum(axis=0) / df.shape[0]
     p = p[p != 0]
@@ -118,15 +69,25 @@ def calculate_trajectory_divergence(
         traj: SubsetTrajectory,
         sub1: str,
         sub2: str,
+        metric: Literal['jensen_shannon', 'total_variation', 'mmd'] = 'jensen_shannon',
+        feature_key: str = None,
 ) -> npt.NDArray:
-    """Calculate Jensen-Shannon divergence between 2 subsets' trajectories."""
-    js_div = []
+    """Calculate divergence between 2 subsets' trajectories."""
+    divs = []
     for day, df in traj.obs.groupby(traj.time_var):
         X = traj[df.index].X
         X = X / X.sum(0, keepdims=True)
         p1 = X[:, traj.var_names == sub1]
         p2 = X[:, traj.var_names == sub2]
-        kl1 = np.sum(p1 * np.log(p1) - p1 * np.log(p2))
-        kl2 = np.sum(p2 * np.log(p2) - p2 * np.log(p1))
-        js_div.append(kl1/2 + kl2/2)
-    return np.array(js_div)
+        if metric == 'jensen_shannon':
+            kl1 = np.sum(p1 * np.log(p1) - p1 * np.log(p2))
+            kl2 = np.sum(p2 * np.log(p2) - p2 * np.log(p1))
+            div = kl1/2 + kl2/2
+        elif metric == 'total_variation':
+            div = 0.5 * np.sum(np.abs(p1 - p2))
+        elif metric == 'mmd':
+            feat = traj[df.index].obsm[feature_key]
+            delta = (p1.T @ feat) - (p2.T @ feat)
+            div = np.dot(delta, delta.T).squeeze()
+        divs.append(div)
+    return np.array(divs)
