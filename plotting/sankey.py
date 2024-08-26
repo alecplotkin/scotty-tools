@@ -67,8 +67,12 @@ class Sankey:
         """Plot a single sankey facet"""
 
         if ax is None:
-            ax = plt.subplot()
+            ax = plt.gca()
         flow_df = self.calculate_flows(t0, t1)
+        # Get rid of populations with zero members to control visual clutter.
+        ix_null = (flow_df['outflow'] == 0) | (flow_df['inflow'] == 0)
+        flow_df = flow_df.loc[~ix_null, :].reset_index()
+        # Need to put labels in specified order.
         left_labels = []
         right_labels = []
         for lab in self.label_order:
@@ -88,6 +92,7 @@ class Sankey:
             showLeftLabels=show_left_labels,
             showRightLabels=show_right_labels,
             stripWidth=0.1,
+            stripPad=0,
             fontsize=10,
             wrapText=True,
             ax=ax,
