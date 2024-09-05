@@ -2,7 +2,7 @@ import logging
 import anndata as ad
 import numpy as np
 import pandas as pd
-from typing import Dict, Literal, Union
+from typing import Dict, Literal, Union, Iterable
 from tqdm import tqdm
 from sketchKH import sketch
 from sklearn.pipeline import Pipeline
@@ -219,27 +219,30 @@ class TRACTER:
 def prune_tracter_model(
         tracter: TRACTER,
         clusters: pd.Series,
-        n_clusters_pruned: int,
+        keep_clusters: Union[int | Iterable],
 ) -> TRACTER:
     """Prune the cluster model to use only the top clusters."""
 
     tracter_pruned = copy(tracter)
-    tracter_pruned.n_clusters = n_clusters_pruned
+    # Select most frequent clusters if keep_clusters is an int, otherwise
+    # use the cluster indices within keep_clusters if it is an iterable.
+    if isinstance(keep_clusters, int):
+        tracter_pruned.n_clusters = keep_clusters
+        cluster_counts = pd.value_counts(clusters)
+        keep_clusters = cluster_counts.index[0:keep_clusters].to_numpy()
 
-    # Get params for top clusters from old model so we can use a warm start.
-    cluster_counts = pd.value_counts(clusters)
-    ix_keep = cluster_counts.index[0:n_clusters_pruned].to_numpy()
+    # Get params for clusters from old model so we can use a warm start.
     gmm = tracter.cluster_model['cluster']
-    weights_init = gmm.weights_[ix_keep]
+    weights_init = gmm.weights_[keep_clusters]
     weights_init = weights_init / weights_init.sum()
-    means_init = gmm.means_[ix_keep, :]
-    precisions_init = gmm.precisions_[ix_keep, :, :]
+    means_init = gmm.means_[keep_clusters, :]
+    precisions_init = gmm.precisions_[keep_clusters, :, :]
 
     pipeline_steps = []
     if tracter_pruned.scale_trajectory_reps:
         pipeline_steps.append(('scaler', StandardScaler()))
     pipeline_steps.append(('cluster', GaussianMixture(
-            n_components=n_clusters_pruned,
+            n_components=len(keep_clusters),
             random_state=tracter.random_state,
             weights_init=weights_init,
             means_init=means_init,

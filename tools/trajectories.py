@@ -2,9 +2,12 @@ import anndata as ad
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from typing import Tuple, Union, Literal
+from typing import Tuple, Union, Literal, Iterable
 from src.sctrat.models.trajectory import OTModel
-from src.sctrat.utils import window
+from src.sctrat.utils import window, adjust_pvalues
+from itertools import combinations
+from scipy.stats import ttest_ind_from_stats
+from statsmodels.stats.multitest import multipletests
 
 
 class TrajectoryMixIn(ad.AnnData):
@@ -65,8 +68,48 @@ class GeneTrajectory(TrajectoryMixIn):
             subset_var=self.subset_var,
         )
 
-    def compare_means(self) -> pd.DataFrame:
-        ...
+    def compare_means(self, comparisons: Iterable = None, log_base: float = None) -> pd.DataFrame:
+        unique_subsets = self.obs[self.subset_var].unique()
+        if comparisons is None:
+            comparisons = combinations(unique_subsets, 2)
+        results = []
+        for day, df in self.obs.groupby(self.time_var):
+            for group1, group2 in comparisons:
+                ix1 = df.loc[df[self.subset_var] == group1, :].index
+                ix2 = df.loc[df[self.subset_var] == group2, :].index
+                mean1 = self[ix1].X.squeeze()
+                mean2 = self[ix2].X.squeeze()
+                stats, pvals = ttest_ind_from_stats(
+                    mean1=mean1,
+                    std1=self[ix1].layers['std'].squeeze(),
+                    nobs1=self[ix1].obs['nobs'].to_numpy(),
+                    mean2=mean2,
+                    std2=self[ix2].layers['std'].squeeze(),
+                    nobs2=self[ix2].obs['nobs'].to_numpy(),
+                    equal_var=False,
+                    alternative='two-sided',
+                )
+                # Not sure if this is the cleanest way to accomplish this...
+                # Assume data is not log-transformed if log_base is None
+                if log_base is None:
+                    log2_fc = np.log2(mean1) - np.log2(mean2)
+                # Switch to log2 if data is log-transformed
+                else:
+                    log2_fc = (mean1 - mean2) / np.log2(log_base)
+                df_comp = pd.DataFrame({
+                    'gene': self.var_names,
+                    'day': day,
+                    'group1': group1,
+                    'group2': group2,
+                    't-statistic': stats,
+                    'pval': pvals,
+                    'log2_fc': log2_fc,
+                })
+                results.append(df_comp)
+        results = pd.concat(results, axis=0, ignore_index=True)
+        results['padj'] = adjust_pvalues(results['pval'], method='fdr_bh')
+        return results
+
 
     @staticmethod
     def from_subset_trajectory(
