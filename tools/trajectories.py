@@ -39,13 +39,36 @@ class SubsetTrajectory(TrajectoryMixIn):
         super().__init__(trajectory, ref_time, time_var)
         self.norm_strategy = norm_strategy
 
+    # TODO: fix subsetting behavior.
+    # This behavior works differently than anndata.__getitem__
+    # It will always return a copy of the subset rather than a view, which
+    # means that code like `traj[ix_, :].X = ...` will not modify the original
+    # traj object.
     def __getitem__(self, index):
         subset = super().__getitem__(index)
-        return GeneTrajectory(
+        return SubsetTrajectory(
             subset.to_memory(),
             ref_time=self.ref_time,
+            norm_strategy=self.norm_strategy,
             time_var=self.time_var,
         )
+
+    def __copy__(self):
+        return SubsetTrajectory(
+            super().copy(),
+            ref_time=self.ref_time,
+            norm_strategy=self.norm_strategy,
+            time_var=self.time_var,
+        )
+
+    def copy(self):
+        return self.__copy__()
+
+    # TODO: think of a better name for this function.
+    def compute_alternative(self):
+        traj_alt = self.copy()
+        traj_alt.X = traj_alt.X.sum(1, keepdims=True) - traj_alt.X
+        return traj_alt
 
 
 class GeneTrajectory(TrajectoryMixIn):
@@ -59,6 +82,11 @@ class GeneTrajectory(TrajectoryMixIn):
         super().__init__(trajectory, ref_time, time_var)
         self.subset_var = subset_var
 
+    # TODO: fix subsetting behavior.
+    # This behavior works differently than anndata.__getitem__
+    # It will always return a copy of the subset rather than a view, which
+    # means that code like `traj[ix_, :].X = ...` will not modify the original
+    # traj object.
     def __getitem__(self, index):
         subset = super().__getitem__(index)
         return GeneTrajectory(
@@ -68,10 +96,23 @@ class GeneTrajectory(TrajectoryMixIn):
             subset_var=self.subset_var,
         )
 
+    def __copy__(self):
+        return GeneTrajectory(
+            super().copy(),
+            ref_time=self.ref_time,
+            time_var=self.time_var,
+            subset_var=self.subset_var
+        )
+
+    def copy(self):
+        return self.__copy__()
+
     def compare_means(self, comparisons: Iterable = None, log_base: float = None) -> pd.DataFrame:
         unique_subsets = self.obs[self.subset_var].unique()
         if comparisons is None:
-            comparisons = combinations(unique_subsets, 2)
+            # Comparisons must be turned into a list, otherwise iterator will
+            # be exhausted after first inner for loop.
+            comparisons = list(combinations(unique_subsets, 2))
         results = []
         for day, df in self.obs.groupby(self.time_var):
             for group1, group2 in comparisons:
@@ -160,10 +201,14 @@ class GeneTrajectory(TrajectoryMixIn):
             stdvs[tp] = pd.DataFrame(
                 sig, index=trajectory.var_names, columns=features.columns
             )
-            # TODO: make nobs conditional on normalization of trajectory?
-            # i.e. to test effect of different effective population sizes.
-            nobs[tp] = pd.DataFrame(index=trajectory.var_names)
-            nobs[tp]['nobs'] = len(df.index)
+            if trajectory.norm_strategy == 'expected_value':
+                n = trajectory[df.index].X.sum(0)
+            elif trajectory.norm_strategy == 'joint':
+                n = trajectory[df.index].X.sum(0) * len(df.index)
+            else:
+                print('norm_strategy not recognized, falling back to using population size for nobs')
+                n = len(df.index)
+            nobs[tp] = pd.DataFrame({'nobs': n}, index=trajectory.var_names)
 
         means = np.concatenate(list(means.values()), axis=0)
         stdvs = np.concatenate(list(stdvs.values()), axis=0)
