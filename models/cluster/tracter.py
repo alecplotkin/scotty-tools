@@ -8,6 +8,7 @@ from sketchKH import sketch
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans
 from src.sctrat.models.trajectory import OTModel
 from src.sctrat.tools.trajectories import compute_trajectories
 from copy import copy
@@ -48,6 +49,7 @@ class TRACTER:
         log_trajectory_reps: bool = True,
         scale_trajectory_reps: bool = True,
         norm_strategy: Literal['joint', 'expected_value'] = 'expected_value',
+        cluster_method: Literal['kmeans', 'gmm'] = 'gmm',
     ):
         self.rep_dims = rep_dims
         self.n_clusters = n_clusters
@@ -56,6 +58,7 @@ class TRACTER:
         self.log_trajectory_reps = log_trajectory_reps
         self.scale_trajectory_reps = scale_trajectory_reps
         self.norm_strategy = norm_strategy
+        self.cluster_method = cluster_method
 
     def fit(
         self,
@@ -101,6 +104,7 @@ class TRACTER:
             trajectory_matrix[self.ix_train],
             log_trajectory_reps=self.log_trajectory_reps,
             scale_trajectory_reps=self.scale_trajectory_reps,
+            cluster_method=self.cluster_method,
         )
         self.cluster_model = cluster_model
 
@@ -198,6 +202,7 @@ class TRACTER:
             trajectory_matrix: ad.AnnData,
             log_trajectory_reps: bool = True,
             scale_trajectory_reps: bool = True,
+            cluster_method: Literal['kmeans', 'gmm'] = 'gmm',
     ) -> Pipeline:
         """Fit clusters on trajectory representations."""
         X = trajectory_matrix.to_df()
@@ -208,9 +213,18 @@ class TRACTER:
             )
         if scale_trajectory_reps:
             pipeline_steps.append(('scaler', StandardScaler()))
-        pipeline_steps.append(('cluster', GaussianMixture(
-                n_components=self.n_clusters, random_state=self.random_state
-            )))
+        if cluster_method == 'gmm':
+            pipeline_steps.append(('cluster', GaussianMixture(
+                    n_components=self.n_clusters,
+                    random_state=self.random_state,
+                )))
+        elif cluster_method == 'kmeans':
+            pipeline_steps.append(('cluster', KMeans(
+                    n_clusters=self.n_clusters,
+                    random_state=self.random_state,
+                )))
+        else:
+            raise ValueError('cluster_method not recognized')
         model = Pipeline(pipeline_steps)
         model.fit(X)
         return model
