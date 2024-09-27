@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Literal, Dict
@@ -40,3 +41,24 @@ def plot_subset_frequencies(
         plt.plot(df[day_field], df[plot_field], c=c, label=subset)
     plt.legend()
     return
+
+
+def plot_subset_frequencies_trajectory(freqs, sub, c=None, ax=None):
+    if ax is None:
+        ax = plt.gca()
+    actual_freq = freqs.loc[freqs['ref_time'] == freqs['day'], sub].to_numpy()
+    ax.plot(actual_freq, c=c)
+    timepoints = freqs['ref_time'].unique()
+    for time in timepoints:
+        pred_freq = freqs.loc[freqs['ref_time'] == time, sub].to_numpy()
+        if np.allclose(pred_freq, 0):
+            continue
+        pad = np.full(len(actual_freq) - len(pred_freq), np.nan)
+        pred_freq = np.concatenate((pad, pred_freq))
+        ax.plot(pred_freq, linestyle=':', c=c)
+    ax.set_xticks(
+        ticks=np.arange(len(timepoints)),
+        labels=timepoints,
+        rotation=90
+    )
+    return ax

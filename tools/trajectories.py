@@ -246,7 +246,7 @@ class GeneTrajectory(TrajectoryMixIn):
         W = W / W.sum(1, keepdims=True)
         mu = W @ X
         Xm = X[np.newaxis, :, :] - mu[:, np.newaxis, :]
-        sig2 = W[:, np.newaxis, :] @ (Xm**2) / (W.shape[1] - 1)
+        sig2 = W[:, np.newaxis, :] @ (Xm**2) * W.shape[1] / (W.shape[1] - 1)
         sig = np.sqrt(np.squeeze(sig2, axis=1))
         return mu, sig
 
@@ -319,3 +319,36 @@ def compute_trajectories(
         time_var=ot_model.time_var
     )
     return traj
+
+
+def compute_subset_frequency_table(
+    ot_model: OTModel, subsets: pd.Series,
+) -> pd.DataFrame:
+    freqs = dict()
+    for i, ref_time in enumerate(ot_model.timepoints):
+        # Usually we're only interested in forecasting the frequencies
+        # into the future, since the frequencies into the past are constant
+        # (for now... until I can implement the correction for expected
+        # population size). However, we are calculating trajectories for all
+        # pairs of time points. This is very inefficient.
+        # TODO: implement method to compute only the necessary trajectories to
+        # forecast into the future.
+        traj = compute_trajectories(
+            ot_model,
+            subsets=subsets,
+            ref_time=ref_time,
+            norm_strategy='joint',
+        )
+        # Not sure why, but the time_var is ending up as a pandas categorical.
+        # Probably something that's happening upstream in compute_trajectories.
+        time_dtype = type(ref_time)
+        traj.obs[traj.time_var] = traj.obs[traj.time_var].astype(time_dtype)
+        traj = traj[traj.obs[traj.time_var] >= ref_time]
+        df_traj = traj.to_df().join(traj.obs)
+        df_freq = df_traj.groupby(traj.time_var).sum().reset_index()
+        freqs[ref_time] = df_freq
+    freqs = pd.concat(
+        freqs.values(), axis=0, keys=freqs.keys(), names=['ref_time']
+    ).reset_index(level='ref_time')
+    freqs[ot_model.time_var] = freqs[ot_model.time_var].astype(time_dtype)
+    return freqs
