@@ -4,11 +4,16 @@ from typing import Dict
 from src.sctrat.tools.trajectories import GeneTrajectory
 
 
+# TODO: refactor so that we can plot trajectories with different groups of
+# time points.
 def plot_gene_trajectory(
         traj: GeneTrajectory,
         gene: str,
         color_dict: Dict = None,
+        ax: plt.Axes = None
 ) -> plt.Axes:
+    if ax is None:
+        ax = plt.subplot()
     for subset, df in traj.obs.groupby(traj.subset_var):
         traj_sub = traj[df.index, gene]
         mean = traj_sub.X[:, 0]
@@ -18,9 +23,7 @@ def plot_gene_trajectory(
         c = None
         if color_dict is not None:
             c = color_dict[subset]
-        plt.plot(time, mean, label=subset, c=c)
-        plt.fill_between(time, mean - se, mean + se, alpha=0.2)
-        plt.xticks(ticks=time, labels=traj_sub.obs[traj.time_var])
-    plt.legend()
-    ax = plt.gca()
+        ax.plot(time, mean, label=subset, c=c)
+        ax.fill_between(time, mean - se, mean + se, color=c, alpha=0.2)
+        ax.set_xticks(ticks=time, labels=traj_sub.obs[traj.time_var])
     return ax
