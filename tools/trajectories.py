@@ -68,6 +68,7 @@ class SubsetTrajectory(TrajectoryMixIn):
     def compute_alternative(self):
         traj_alt = self.copy()
         traj_alt.X = traj_alt.X.sum(1, keepdims=True) - traj_alt.X
+        traj_alt.var_names = '~ ' + traj_alt.var_names
         return traj_alt
 
 
@@ -285,11 +286,11 @@ def compute_trajectories(
     ancestor_days = [tp for tp in ot_model.timepoints if tp <= ref_time]
     ancestor_day_pairs = window(ancestor_days, k=2)
     for t0, t1 in ancestor_day_pairs[::-1]:
-        traj = ot_model.pull_back(traj, t0, t1, normalize=False)
         # TODO: abstract this into a static method...
+        traj = ot_model.pull_back(traj, t0, t1, normalize=normalize)
         if normalize:
             norm_factor = traj.shape[0] if norm_to_days else 1
-            traj.X = traj.X / traj.X.sum(keepdims=True) * norm_factor
+            traj.X = traj.X * norm_factor
         traj_by_tp[t0] = traj.copy()
 
     # Get descendant trajectories starting with ref_time.
@@ -297,10 +298,10 @@ def compute_trajectories(
     descendant_days = [tp for tp in ot_model.timepoints if tp >= ref_time]
     descendant_day_pairs = window(descendant_days, k=2)
     for t0, t1 in descendant_day_pairs:
-        traj = ot_model.push_forward(traj, t0, t1, normalize=False)
+        traj = ot_model.push_forward(traj, t0, t1, normalize=normalize)
         if normalize:
             norm_factor = traj.shape[0] if norm_to_days else 1
-            traj.X = traj.X / traj.X.sum(keepdims=True) * norm_factor
+            traj.X = traj.X * norm_factor
         traj_by_tp[t1] = traj.copy()
 
     # Time points must be sorted before concatenating, otherwise will be in
@@ -352,3 +353,44 @@ def compute_subset_frequency_table(
     ).reset_index(level='ref_time')
     freqs[ot_model.time_var] = freqs[ot_model.time_var].astype(time_dtype)
     return freqs
+
+
+def _format_results_df(stats: npt.NDArray, value_name: str, traj1: GeneTrajectory, traj2: GeneTrajectory) -> pd.DataFrame:
+    meta = pd.DataFrame({
+        traj1.time_var: traj1.obs[traj1.time_var],
+        'group1': traj1.obs[traj1.subset_var],
+        'group2': traj2.obs[traj2.subset_var],
+    })
+    res = pd.DataFrame(stats, index=traj1.obs_names, columns=traj1.var_names)
+    res = res.join(meta).melt(id_vars=meta.columns, var_name='gene', value_name=value_name)
+    return res
+
+
+def compare_trajectory_means(traj1: GeneTrajectory, traj2: GeneTrajectory, log_base: float = None) -> pd.DataFrame:
+    # TODO: ensure that traj1 and traj2 are compatible, i.e. that genes and
+    # days match.
+    stats, pvals = ttest_ind_from_stats(
+        mean1=traj1.X,
+        std1=traj1.layers['std'],
+        nobs1=traj1.obs['nobs'].to_numpy().reshape(-1, 1),
+        mean2=traj2.X,
+        std2=traj2.layers['std'],
+        nobs2=traj2.obs['nobs'].to_numpy().reshape(-1, 1),
+        equal_var=False,
+        alternative='two-sided',
+    )
+    # Not sure if this is the cleanest way to accomplish this...
+    # Assume data is not log-transformed if log_base is None
+    if log_base is None:
+        logfc = np.log2(traj1.X) - np.log2(traj2.X)
+    # Switch to log2 if data is log-transformed
+    else:
+        logfc = (traj1.X - traj2.X) / np.log2(log_base)
+
+    stats = _format_results_df(stats, 't-statistic', traj1, traj2)
+    pvals = _format_results_df(pvals, 'pval', traj1, traj2)
+    logfc = _format_results_df(logfc, 'log2_fc', traj1, traj2)
+    stats['pval'] = pvals['pval']
+    stats['padj'] = adjust_pvalues(stats['pval'], method='fdr_bh')
+    stats['log2_fc'] = logfc['log2_fc']
+    return stats
