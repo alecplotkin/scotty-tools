@@ -121,15 +121,16 @@ class GeneTrajectory(TrajectoryMixIn):
                 ix2 = df.loc[df[self.subset_var] == group2, :].index
                 mean1 = self[ix1].X.squeeze()
                 mean2 = self[ix2].X.squeeze()
+                std1 = self[ix1].layers['std'].squeeze()
+                std2 = self[ix2].layers['std'].squeeze()
+                nobs1 = self[ix1].obs['nobs'].to_numpy()
+                nobs2 = self[ix2].obs['nobs'].to_numpy()
+
+                # TODO: add check for if std error is 0
                 stats, pvals = ttest_ind_from_stats(
-                    mean1=mean1,
-                    std1=self[ix1].layers['std'].squeeze(),
-                    nobs1=self[ix1].obs['nobs'].to_numpy(),
-                    mean2=mean2,
-                    std2=self[ix2].layers['std'].squeeze(),
-                    nobs2=self[ix2].obs['nobs'].to_numpy(),
-                    equal_var=False,
-                    alternative='two-sided',
+                    mean1=mean1, std1=std1, nobs1=nobs1,
+                    mean2=mean2, std2=std2, nobs2=nobs2,
+                    equal_var=False, alternative='two-sided',
                 )
                 # Not sure if this is the cleanest way to accomplish this...
                 # Assume data is not log-transformed if log_base is None
@@ -138,6 +139,7 @@ class GeneTrajectory(TrajectoryMixIn):
                 # Switch to log2 if data is log-transformed
                 else:
                     log2_fc = (mean1 - mean2) / np.log2(log_base)
+
                 df_comp = pd.DataFrame({
                     'gene': self.var_names,
                     'day': day,
