@@ -245,29 +245,39 @@ def prune_tracter_model(
         cluster_counts = pd.value_counts(clusters)
         keep_clusters = cluster_counts.index[0:keep_clusters].to_numpy()
 
-    # Get params for clusters from old model so we can use a warm start.
-    gmm = tracter.cluster_model['cluster']
-    weights_init = gmm.weights_[keep_clusters]
-    weights_init = weights_init / weights_init.sum()
-    means_init = gmm.means_[keep_clusters, :]
-    precisions_init = gmm.precisions_[keep_clusters, :, :]
-
     pipeline_steps = []
-    if tracter_pruned.scale_trajectory_reps:
+    if hasattr(tracter_pruned, 'scale_trajectory_reps') and tracter_pruned.scale_trajectory_reps:
         pipeline_steps.append(('scaler', StandardScaler()))
-    pipeline_steps.append(('cluster', GaussianMixture(
-            n_components=len(keep_clusters),
-            random_state=tracter.random_state,
-            weights_init=weights_init,
-            means_init=means_init,
-            precisions_init=precisions_init,
-        )
-    ))
-    gmm_pruned = Pipeline(pipeline_steps)
 
+    # Get params for clusters from old model so we can use a warm start.
+    model = tracter.cluster_model['cluster']
+    if isinstance(model, GaussianMixture):
+        weights_init = model.weights_[keep_clusters]
+        weights_init = weights_init / weights_init.sum()
+        means_init = model.means_[keep_clusters, :]
+        precisions_init = model.precisions_[keep_clusters, :, :]
+        pipeline_steps.append(('cluster', GaussianMixture(
+                n_components=len(keep_clusters),
+                random_state=tracter.random_state,
+                weights_init=weights_init,
+                means_init=means_init,
+                precisions_init=precisions_init,
+            )
+        ))
+    elif isinstance(model, KMeans):
+        pipeline_steps.append(('cluster', KMeans(
+                n_clusters=len(keep_clusters),
+                random_state=tracter.random_state,
+                init=model.cluster_centers_[keep_clusters],
+            )
+        ))
+    else:
+        raise ValueError('cluster_method not recognized')
+
+    model_pruned = Pipeline(pipeline_steps)
     # Fit new clusters starting from top old clusters.
     ix_train = tracter_pruned.ix_train
     X = tracter_pruned.trajectory_matrix[ix_train, :].to_df()
-    gmm_pruned.fit(X)
-    tracter_pruned.cluster_model = gmm_pruned
+    model_pruned.fit(X)
+    tracter_pruned.cluster_model = model_pruned
     return tracter_pruned

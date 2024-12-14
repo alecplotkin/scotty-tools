@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from typing import Literal, Dict
+from typing import Literal, Dict, Any
+# from matplotlib.typing import ColorType
+from matplotlib.axes import Axes
 
 
 def get_subset_frequency_table(
@@ -43,11 +45,18 @@ def plot_subset_frequencies(
     return
 
 
-def plot_subset_frequencies_trajectory(freqs, sub, c=None, ax=None):
+def plot_subset_frequencies_trajectory(
+        freqs: pd.DataFrame,
+        sub: str,
+        c: Any = None,
+        ax: Axes = None,
+        main_linewidth: float = None,
+        trajectory_linewidth: float = None,
+):
     if ax is None:
         ax = plt.gca()
     actual_freq = freqs.loc[freqs['ref_time'] == freqs['day'], sub].to_numpy()
-    ax.plot(actual_freq, c=c)
+    ax.plot(actual_freq, c=c, linewidth=main_linewidth)
     timepoints = freqs['ref_time'].unique()
     for time in timepoints:
         pred_freq = freqs.loc[freqs['ref_time'] == time, sub].to_numpy()
@@ -55,7 +64,7 @@ def plot_subset_frequencies_trajectory(freqs, sub, c=None, ax=None):
             continue
         pad = np.full(len(actual_freq) - len(pred_freq), np.nan)
         pred_freq = np.concatenate((pad, pred_freq))
-        ax.plot(pred_freq, linestyle=':', c=c)
+        ax.plot(pred_freq, linestyle=':', c=c, linewidth=trajectory_linewidth)
     ax.set_xticks(
         ticks=np.arange(len(timepoints)),
         labels=timepoints,

@@ -143,7 +143,7 @@ class TRACTER_kernel:
             emb = time_embeddings[time].loc[ix_day, :]
             traj = compute_trajectories(
                 ot_model, emb, ref_time=time,
-                normalize=True, norm_strategy='expected_value',
+                normalize=True, normalize_to_population_size=True,
             )
             if log1p_transform:
                 g = np.sum(traj.X ** 2, axis=1)

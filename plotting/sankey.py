@@ -4,10 +4,11 @@ import numpy.typing as npt
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Union, Literal, Dict, List
+from typing import Union, Literal, Dict, List, Tuple
 from src.sctrat.models.trajectory import OTModel
 from src.sctrat.utils import window
-from src.pysankey.sankey import sankey
+from ._flowplot import plot_flows
+# from src.pysankey.sankey import sankey
 
 
 class Sankey:
@@ -18,8 +19,10 @@ class Sankey:
             ot_model: OTModel,
             subsets: Union[pd.DataFrame, pd.Series],
             color_dict: Dict = None,
-            label_order: List = None,
+            group_order: List = None,
             palette: str = None,
+            endpoint_width: float = 0.05,
+            cache_flow_dfs: bool = True,
     ):
         self.ot_model = ot_model
         if isinstance(subsets, pd.Series):
@@ -28,73 +31,103 @@ class Sankey:
             subsets = subsets.astype(float)
         subsets.columns = subsets.columns.astype(str)
         self.subsets = subsets
-        if label_order is None:
-            label_order = subsets.columns.tolist()
-        self.label_order = label_order
+        if group_order is None:
+            group_order = subsets.columns.tolist()
+        self.group_order = group_order
         if color_dict is None:
-            pal = sns.color_palette(palette=palette, n_colors=len(label_order))
-            color_dict = dict(zip(label_order, pal))
+            pal = sns.color_palette(palette=palette, n_colors=len(group_order))
+            color_dict = dict(zip(group_order, pal))
         self.color_dict = color_dict
+        self.endpoint_width = endpoint_width
+        self.cache_flow_dfs = cache_flow_dfs
+        if cache_flow_dfs:
+            self.flow_dfs = dict()
 
     def plot_all_transitions(
             self,
             show_labels: bool = False,
-            aspect_ratio: float = 0.4,
+            timepoints: List = None,
+            figsize: Tuple = None,
+            endpoint_linewidth: float = None,
     ):
         """Plot all consecutive transitions in a single fig."""
 
         day_pairs = self.ot_model.day_pairs
-        n_plots = len(day_pairs)
-        fig, axs = plt.subplots(
-            1, n_plots, figsize=(4*aspect_ratio*n_plots, 4*n_plots)
-        )
+        if timepoints is None:
+            timepoints = self.ot_model.timepoints
+        timepoints = list(sorted(timepoints))
+        n_timepoints = len(timepoints)
+        timepoints = dict(zip(timepoints, range(n_timepoints)))
+
+        fig = plt.figure(figsize=figsize)
         for i, day_pair in enumerate(day_pairs):
+            start = timepoints[day_pair[0]]
+            stop = timepoints[day_pair[1]]
+
+            if i == 0 and start != 0:
+                ax0 = plt.subplot(1, n_timepoints - 1, (1, start))
+                ax0.axis('off')
+
+            ax = plt.subplot(1, n_timepoints - 1, (start + 1, stop))
+            endpoint_width = self.endpoint_width / (stop - start)
             self.plot_sankey(
-                *day_pair, ax=axs[i],
-                show_left_labels=show_labels,
-                show_right_labels=show_labels,
+                *day_pair, ax=ax,
+                show_source_labels=show_labels,
+                show_target_labels=show_labels,
+                endpoint_width=endpoint_width,
+                endpoint_linewidth=endpoint_linewidth,
             )
-        return fig, axs
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+
+        if stop != n_timepoints - 1:
+            axn = plt.subplot(1, n_timepoints - 1, (stop, n_timepoints - 1))
+            axn.axis('off')
+
+        plt.subplots_adjust(wspace=0, hspace=0)
+        return fig
 
     def plot_sankey(
             self,
             t0: float,
             t1: float,
             ax: plt.Axes = None,
-            show_left_labels: bool = True,
-            show_right_labels: bool = True,
+            show_source_labels: bool = True,
+            show_target_labels: bool = True,
+            endpoint_width: float = None,
+            endpoint_linewidth: float = None,
     ) -> plt.Axes:
         """Plot a single sankey facet"""
 
         if ax is None:
             ax = plt.gca()
-        flow_df = self.calculate_flows(t0, t1)
+        if self.cache_flow_dfs and (t0, t1) in self.flow_dfs:
+            flow_df = self.flow_dfs[(t0, t1)]
+        else:
+            flow_df = self.calculate_flows(t0, t1)
         # Get rid of populations with zero members to control visual clutter.
         ix_null = (flow_df['outflow'] == 0) | (flow_df['inflow'] == 0)
         flow_df = flow_df.loc[~ix_null, :].reset_index()
-        # Need to put labels in specified order.
-        left_labels = []
-        right_labels = []
-        for lab in self.label_order:
-            if lab in flow_df['source'].unique():
-                left_labels.append(lab)
-            if lab in flow_df['target'].unique():
-                right_labels.append(lab)
 
-        sankey(
-            left=flow_df['source'],
-            right=flow_df['target'],
-            leftWeight=flow_df['outflow'],
-            rightWeight=flow_df['inflow'],
-            colorDict=self.color_dict,
-            leftLabels=left_labels,
-            rightLabels=right_labels,
-            showLeftLabels=show_left_labels,
-            showRightLabels=show_right_labels,
-            stripWidth=0.1,
-            stripPad=0,
+        # # Need to put labels in specified order.
+        # source_groups = []
+        # target_groups = []
+        # for group in self.group_order:
+        #     if group in flow_df['source'].unique():
+        #         source_groups.append(group)
+        #     if group in flow_df['target'].unique():
+        #         target_groups.append(group)
+
+        plot_flows(
+            sources=flow_df['source'],
+            targets=flow_df['target'],
+            outflows=flow_df['outflow'],
+            inflows=flow_df['inflow'],
+            palette=self.color_dict,
+            group_order=self.group_order,
+            endpoint_width=endpoint_width,
+            endpoint_linewidth=endpoint_linewidth,
             fontsize=10,
-            wrapText=True,
             ax=ax,
         )
         return ax
@@ -131,6 +164,9 @@ class Sankey:
         outflow = self._format_flow(outflow, s0, s1, name='outflow')
         inflow = self._format_flow(inflow, s0, s1, name='inflow')
         flow_df = pd.merge(outflow, inflow, on=['source', 'target'])
+
+        if self.cache_flow_dfs:
+            self.flow_dfs[(t0, t1)] = flow_df
         return flow_df
 
     @staticmethod

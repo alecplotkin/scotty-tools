@@ -259,6 +259,17 @@ class GeneTrajectory(TrajectoryMixIn):
         return rep
 
 
+def _propagate_trajectory(traj, prop_func, t0, t1, normalize, normalize_to_population_size):
+    traj = prop_func(traj, t0, t1, normalize=normalize)
+    if normalize:
+        if normalize_to_population_size:
+            norm_factor = traj.shape[0]
+        else:
+            norm_factor = 1 / traj.X.sum()
+        traj.X = traj.X * norm_factor
+    return traj
+
+
 # TODO: work on normalization behavior.
 def compute_trajectories(
         ot_model: OTModel,
@@ -266,7 +277,7 @@ def compute_trajectories(
         ref_time: int,
         use_ancestor_growth: bool = True,
         normalize: bool = True,
-        norm_strategy: Literal['joint', 'expected_value'] = 'joint',
+        normalize_to_population_size: bool = True,
 ) -> ad.AnnData:
 
     ix_day = ot_model.meta.index[ot_model.meta[ot_model.time_var] == ref_time]
@@ -279,20 +290,18 @@ def compute_trajectories(
             'subsets and model have different number of cells at ref_time'
         )
     traj = ad.AnnData(subsets)
-    norm_to_days = True if norm_strategy == 'expected_value' else False
-    if normalize and not norm_to_days:
-        traj.X = traj.X / traj.shape[0]
+    if normalize and not normalize_to_population_size:
+        traj.X = traj.X / traj.X.sum()
     traj_by_tp = {ref_time: traj.copy()}
 
     # # Get ancestor trajectories starting with ref_time.
     ancestor_days = [tp for tp in ot_model.timepoints if tp <= ref_time]
     ancestor_day_pairs = window(ancestor_days, k=2)
     for t0, t1 in ancestor_day_pairs[::-1]:
-        # TODO: abstract this into a static method...
-        traj = ot_model.pull_back(traj, t0, t1, normalize=normalize)
-        if normalize:
-            norm_factor = traj.shape[0] if norm_to_days else 1
-            traj.X = traj.X * norm_factor
+        traj = _propagate_trajectory(
+            traj, ot_model.pull_back, t0, t1, normalize=normalize,
+            normalize_to_population_size=normalize_to_population_size,
+        )
         traj_by_tp[t0] = traj.copy()
 
     # Get descendant trajectories starting with ref_time.
@@ -300,11 +309,19 @@ def compute_trajectories(
     descendant_days = [tp for tp in ot_model.timepoints if tp >= ref_time]
     descendant_day_pairs = window(descendant_days, k=2)
     for t0, t1 in descendant_day_pairs:
-        traj = ot_model.push_forward(traj, t0, t1, normalize=normalize)
-        if normalize:
-            norm_factor = traj.shape[0] if norm_to_days else 1
-            traj.X = traj.X * norm_factor
+        traj = _propagate_trajectory(
+            traj, ot_model.push_forward, t0, t1, normalize=normalize,
+            normalize_to_population_size=normalize_to_population_size,
+        )
         traj_by_tp[t1] = traj.copy()
+
+    if normalize:
+        if normalize_to_population_size:
+            norm_strategy = 'expected_value'
+        else:
+            norm_strategy = 'joint'
+    else:
+        norm_strategy = None
 
     # Time points must be sorted before concatenating, otherwise will be in
     # order they were added.
@@ -340,7 +357,8 @@ def compute_subset_frequency_table(
             ot_model,
             subsets=subsets,
             ref_time=ref_time,
-            norm_strategy='joint',
+            normalize=True,
+            normalize_to_population_size=False,
         )
         # Not sure why, but the time_var is ending up as a pandas categorical.
         # Probably something that's happening upstream in compute_trajectories.
