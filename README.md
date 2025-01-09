@@ -1,2 +1,2 @@
-# single-cell-trajectory-tools
-Tools for downstream analysis of single-cell trajectory models.
+# scotty-tools
+Tools for downstream analysis of **s**ingle **c**ell **o**ptimal **t**ransport **t**rajector**y** models.
