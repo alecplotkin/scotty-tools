@@ -1,5 +1,15 @@
 from scotty.models.trajectory.ot import (
-    OTModel, WOTModel, GenericOTModel, coarsen_ot_model
+    MoscotModel,
+    WOTModel,
+    GenericOTModel,
+    OTModel,
+    coarsen_ot_model,
 )
 
-__all__ = ["WOTModel", "GenericOTModel", "OTModel", "coarsen_ot_model"]
+__all__ = [
+    "MoscotModel",
+    "WOTModel",
+    "GenericOTModel",
+    "OTModel",
+    "coarsen_ot_model",
+]

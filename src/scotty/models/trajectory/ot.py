@@ -9,6 +9,9 @@ from typing import (
         TYPE_CHECKING,
 )
 
+if TYPE_CHECKING:
+    import wot
+    import moscot
 
 class BaseOTModel:
     """Container for various types of trajectory models."""
@@ -61,6 +64,37 @@ class BaseOTModel:
         return p1
 
 
+class MoscotModel(BaseOTModel):
+    """Moscot trajectory model"""
+
+    def __init__(self, model: 'moscot.problems.TemporalProblem'):
+        meta = model.adata.obs[[model.temporal_key]]
+        timepoints = list(sorted(meta[model.temporal_key].unique()))
+        day_pairs = list(model.problems.keys())
+        super().__init__(
+            meta=meta,
+            timepoints=timepoints,
+            day_pairs=day_pairs,
+            time_var=model.temporal_key,
+        )
+        self.moscot_model = model
+
+    @staticmethod
+    def load(path) -> "MoscotModel":
+        from moscot.problems import TemporalProblem
+        return MoscotModel(TemporalProblem.load(path))
+
+    # TODO: Override push_forward / pull_back behavior to use native push / pull methods.
+
+    # TODO: create TransportMap class to be returned by get_coupling?
+    def get_coupling(self, t0: float, t1: float) -> ad.AnnData:
+        problem = self.moscot_model[(t0, t1)]
+        tmap = ad.AnnData(np.asarray(problem.solution.transport_matrix))
+        tmap.obs_names = problem.adata_src.obs_names
+        tmap.var_names = problem.adata_tgt.obs_names
+        return tmap
+
+
 class WOTModel(BaseOTModel):
     """WOT trajectory model"""
 
@@ -69,7 +103,6 @@ class WOTModel(BaseOTModel):
         model: 'wot.tmap.TransportMapModel',
         time_var: str = 'day',
     ):
-        import wot
         super().__init__(
             meta=model.meta,
             timepoints=list(sorted(model.timepoints)),
@@ -80,10 +113,8 @@ class WOTModel(BaseOTModel):
 
     @staticmethod
     def load(path) -> "WOTModel":
+        import wot
         return WOTModel(wot.tmap.TransportMapModel.from_directory(path))
-
-    # TODO
-    def fit(self, data: ad.AnnData) -> "WOTModel": ...
 
     # TODO: create TransportMap class to be returned by get_coupling?
     def get_coupling(self, t0: float, t1: float) -> ad.AnnData:
