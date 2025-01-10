@@ -11,6 +11,18 @@ from ._flowplot import plot_flows
 # from src.pysankey.sankey import sankey
 
 
+def _calculate_entropy(x):
+    x /= x.sum()
+    return -np.sum(x * np.log(x))
+
+
+def _expected_flow_entropy(flow_df, group_var, flow_var):
+    weights = flow_df.groupby(group_var)[flow_var].sum()
+    weights /= weights.sum()
+    entropy = flow_df.groupby(group_var)[flow_var].apply(_calculate_entropy)
+    return np.nansum(weights * entropy)
+
+
 class Sankey:
     """Class to plot sankey diagrams."""
 
@@ -42,11 +54,14 @@ class Sankey:
         self.cache_flow_dfs = cache_flow_dfs
         if cache_flow_dfs:
             self.flow_dfs = dict()
+        else:
+            self.flow_dfs = None
 
     def plot_all_transitions(
             self,
             show_labels: bool = False,
             timepoints: List = None,
+            min_flow_threshold: float = None,
             figsize: Tuple = None,
             endpoint_linewidth: float = None,
     ):
@@ -72,6 +87,7 @@ class Sankey:
             endpoint_width = self.endpoint_width / (stop - start)
             self.plot_sankey(
                 *day_pair, ax=ax,
+                min_flow_threshold=min_flow_threshold,
                 show_source_labels=show_labels,
                 show_target_labels=show_labels,
                 endpoint_width=endpoint_width,
@@ -91,6 +107,7 @@ class Sankey:
             self,
             t0: float,
             t1: float,
+            min_flow_threshold: float = None,
             ax: plt.Axes = None,
             show_source_labels: bool = True,
             show_target_labels: bool = True,
@@ -123,6 +140,7 @@ class Sankey:
             targets=flow_df['target'],
             outflows=flow_df['outflow'],
             inflows=flow_df['inflow'],
+            min_flow_threshold=min_flow_threshold,
             palette=self.color_dict,
             group_order=self.group_order,
             endpoint_width=endpoint_width,
@@ -169,6 +187,91 @@ class Sankey:
             self.flow_dfs[(t0, t1)] = flow_df
         return flow_df
 
+    # def compute_metrics(self) -> pd.DataFrame:
+    #     """Compute evaluation metrics for clusters given OT model.
+
+    #     Output is a dataframe with columns for each time point, subset,
+    #     direction, and metric. Metrics include cluster consistency, fate
+    #     entropy, and fate entropy gap.
+    #     """
+
+    #     metric_fns = {
+    #         'consistency': fate_consistency,
+    #         'entropy': fate_entropy,
+    #     }
+    #     merge_columns = ['subset', 'direction']
+    #     results = dict()
+    #     for day_pair, df in self.flow_dfs.items():
+    #         metric_results = []
+    #         for metric, metric_fn in metric_fns.items():
+    #             metric_results.append(metric_fn(df))
+    #         results[day_pair] = reduce(
+    #             lambda left, right: pd.merge(left, right, on=merge_columns),
+    #             metric_results,
+    #         )
+    #     results = pd.concat(
+    #         results.values(), axis=0, keys=results.keys(), names=['day_pair'],
+    #     )
+    #     return results
+
+    def compute_flow_consistency(self):
+        time_var = self.ot_model.time_var
+        time_keys = [f'{time_var}_0', f'{time_var}_1']
+        flow_df = pd.concat(
+            self.flow_dfs.values(),
+            axis=0,
+            keys=self.flow_dfs.keys(),
+            names=time_keys,
+        )
+        flow_df = flow_df.loc[flow_df['source'] == flow_df['target'], :]
+        flow_df.drop(['source', 'target'], axis=1, inplace=True)
+        consistency = flow_df.groupby(time_keys).sum()
+        consistency = consistency.rename(
+            {'outflow': 'forward', 'inflow': 'backward'}, axis=1
+        ).melt(
+            var_name='direction', value_name='consistency', ignore_index=False
+        ).reset_index()
+        return consistency
+
+    def compute_flow_entropy(self):
+        time_var = self.ot_model.time_var
+        time_keys = [f'{time_var}_0', f'{time_var}_1']
+        flow_df = pd.concat(
+            self.flow_dfs.values(),
+            axis=0,
+            keys=self.flow_dfs.keys(),
+            names=time_keys,
+        )
+        expected_entropy_out = flow_df.groupby(time_keys).apply(
+            lambda df: _expected_flow_entropy(df, 'source', 'outflow')
+        )
+        expected_entropy_in = flow_df.groupby(time_keys).apply(
+            lambda df: _expected_flow_entropy(df, 'target', 'inflow')
+        )
+        expected_entropy = pd.concat(
+            [expected_entropy_out, expected_entropy_in],
+            axis=0,
+            keys=['forward', 'backward'],
+            names=['direction'],
+        )
+
+        src_sizes = flow_df.groupby(time_keys + ['source'])['outflow'].sum()
+        src_entropy = src_sizes.groupby(time_keys).apply(_calculate_entropy)
+        tgt_sizes = flow_df.groupby(time_keys + ['target'])['inflow'].sum()
+        tgt_entropy = tgt_sizes.groupby(time_keys).apply(_calculate_entropy)
+        prior_entropy = pd.concat(
+            [tgt_entropy, src_entropy],
+            axis=0,
+            keys=['forward', 'backward'],
+            names=['direction'],
+        )
+
+        results = pd.DataFrame({
+            'expected': expected_entropy,
+            'prior': prior_entropy,
+        })
+        return results
+
     @staticmethod
     def _format_flow(
             flow: npt.NDArray,
@@ -182,3 +285,6 @@ class Sankey:
             id_vars=['source'], var_name='target', value_name=name
         )
         return df
+    """
+    # TODO
+    """

@@ -25,6 +25,8 @@ def plot_flows(
         textpad: float = 0.025,
         fontsize: float = 14,
         flow_alpha: float = 0.6,
+        min_flow_alpha: float = 0.05,
+        min_flow_threshold: float = None,
         n_steps: int = 50,
         kernel_width: float = 0.5,
         ax: Axes = None,
@@ -77,6 +79,11 @@ def plot_flows(
     # Get exact y ranges for each (source, target) pair.
     flow_df = _calculate_flow_ranges(flow_df, source_ranges, target_ranges)
 
+    # Sort flow_df by max flow prior to plotting, to prioritize larger flows
+    # (which will be plotted on top).
+    flow_df['max_flow'] = flow_df[['inflow', 'outflow']].max(1)
+    flow_df = flow_df.sort_values('max_flow')
+
     # TODO: check boundary conditions on kernel_width.
     kernel_steps = int(kernel_width * n_steps * 2)
     z = np.linspace(-3, 3, kernel_steps)
@@ -84,6 +91,10 @@ def plot_flows(
     kernel /= kernel.sum()
 
     for ix, row in flow_df.iterrows():
+        if _check_min_flow_conditions(row, min_flow_threshold):
+            alpha = min_flow_alpha
+        else:
+            alpha = flow_alpha
         y0_source = row['y0_source']
         y1_source = row['y1_source']
         y0_target = row['y0_target']
@@ -96,7 +107,7 @@ def plot_flows(
         x = np.linspace(0.01, 0.99, 2*n_steps - kernel_steps + 1)
         ax.fill_between(
             x, y_low, y_high,
-            alpha=flow_alpha,
+            alpha=alpha,
             color=color_dict[row['source']],
         )
 
@@ -139,7 +150,7 @@ def _calculate_endpoint_offsets(outflows, inflows):
 def _calculate_endpoint_ranges(flow_df, group_var, value_var, init_offset=0):
     ranges = dict()
     y0 = init_offset
-    for group, df in flow_df.groupby(group_var):
+    for group, df in flow_df.groupby(group_var, observed=True):
         y1 = df[value_var].sum() + y0
         ranges[group] = (y0, y1)
         y0 = y1
@@ -148,11 +159,9 @@ def _calculate_endpoint_ranges(flow_df, group_var, value_var, init_offset=0):
 
 def _calculate_flow_ranges(flow_df, source_ranges, target_ranges):
     target_offsets = defaultdict(float)
-    for source, df in flow_df.groupby('source'):
+    for source, df in flow_df.groupby('source', observed=True):
         source_offset = 0
-        for target, r in df.groupby('target'):
-            if r.shape[0] == 0:
-                continue
+        for target, r in df.groupby('target', observed=True):
             outflow = r.at[r.index[0], 'outflow']
             y0_source = source_ranges[source][0] + source_offset
             y1_source = y0_source + outflow
@@ -167,3 +176,10 @@ def _calculate_flow_ranges(flow_df, source_ranges, target_ranges):
             flow_df.loc[r.index, 'y1_target'] = y1_target
             target_offsets[target] += inflow
     return flow_df
+
+
+def _check_min_flow_conditions(row, thresh):
+    if thresh is None:
+        return False
+    else:
+        return (row['inflow'] < thresh) & (row['outflow'] < thresh)
