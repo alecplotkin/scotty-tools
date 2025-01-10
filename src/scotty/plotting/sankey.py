@@ -5,8 +5,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Union, Literal, Dict, List, Tuple
-from src.sctrat.models.trajectory import OTModel
-from src.sctrat.utils import window
+from scotty.models.trajectory import OTModel
+from scotty.utils import window
 from ._flowplot import plot_flows
 # from src.pysankey.sankey import sankey
 

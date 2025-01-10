@@ -1,4 +1,4 @@
-from src.sctrat.models.trajectory.ot import (
+from scotty.models.trajectory.ot import (
     OTModel, WOTModel, GenericOTModel, coarsen_ot_model
 )
 

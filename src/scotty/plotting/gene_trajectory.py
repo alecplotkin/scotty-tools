@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict
-from src.sctrat.tools.trajectories import GeneTrajectory
+from scotty.tools.trajectories import GeneTrajectory
 
 
 # TODO: refactor so that we can plot trajectories with different groups of

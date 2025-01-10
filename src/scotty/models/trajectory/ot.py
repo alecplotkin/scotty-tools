@@ -5,9 +5,9 @@ from typing import (
         List,
         Dict,
         Tuple,
-        TypeVar
+        TypeVar,
+        TYPE_CHECKING,
 )
-import wot
 
 
 class BaseOTModel:
@@ -66,9 +66,10 @@ class WOTModel(BaseOTModel):
 
     def __init__(
         self,
-        model: wot.tmap.TransportMapModel = None,
+        model: 'wot.tmap.TransportMapModel',
         time_var: str = 'day',
     ):
+        import wot
         super().__init__(
             meta=model.meta,
             timepoints=list(sorted(model.timepoints)),
