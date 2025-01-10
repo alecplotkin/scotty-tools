@@ -28,6 +28,34 @@ class TrajectoryMixIn(ad.AnnData):
         return rep
 
 
+class TrajectoryExpectation(TrajectoryMixIn):
+    def __init__(
+        self,
+        trajectory: ad.AnnData,
+        ref_time: float,
+        time_var: str = 'day',
+    ):
+        super().__init__(trajectory, ref_time, time_var)
+
+    def __getitem__(self, index):
+        subset = super().__getitem__(index)
+        return TrajectoryExpectation(
+            subset.to_memory(),
+            ref_time=self.ref_time,
+            time_var=self.time_var,
+        )
+
+    def __copy__(self):
+        return TrajectoryExpectation(
+            super().copy(),
+            ref_time=self.ref_time,
+            time_var=self.time_var,
+        )
+
+    def copy(self):
+        return self.__copy__()
+
+
 class SubsetTrajectory(TrajectoryMixIn):
     def __init__(
         self,
@@ -271,14 +299,18 @@ def _propagate_trajectory(traj, prop_func, t0, t1, normalize, normalize_to_popul
 
 
 # TODO: work on normalization behavior.
+# TODO: add docstring
 def compute_trajectories(
         ot_model: OTModel,
         subsets: Union[pd.Series, pd.DataFrame, npt.NDArray],
         ref_time: int,
-        use_ancestor_growth: bool = True,
+        condition_on: Literal['reference', 'ancestors', 'descendants'] = 'reference',
         normalize: bool = True,
         normalize_to_population_size: bool = True,
-) -> ad.AnnData:
+) -> SubsetTrajectory:
+    """
+    # TODO
+    """
 
     ix_day = ot_model.meta.index[ot_model.meta[ot_model.time_var] == ref_time]
     if isinstance(subsets, pd.Series):
@@ -323,8 +355,7 @@ def compute_trajectories(
     else:
         norm_strategy = None
 
-    # Time points must be sorted before concatenating, otherwise will be in
-    # order they were added.
+    # Sort time points before concatenating, otherwise will be in order added.
     traj_by_tp = {key: traj_by_tp[key] for key in sorted(traj_by_tp.keys())}
     # Combine all trajectories into single SubsetTrajectory object
     traj = SubsetTrajectory(
@@ -336,6 +367,59 @@ def compute_trajectories(
         ),
         ref_time=ref_time,
         norm_strategy=norm_strategy,
+        time_var=ot_model.time_var
+    )
+    return traj
+
+
+# TODO: add docstring
+def compute_trajectory_expectation(
+    ot_model: OTModel,
+    features: Union[pd.Series, pd.DataFrame, npt.NDArray],
+    ref_time: float,
+) -> TrajectoryExpectation:
+    """
+    # TODO
+    """
+
+    ix_day = ot_model.meta.index[ot_model.meta[ot_model.time_var] == ref_time]
+    if isinstance(features, pd.Series):
+        features = pd.get_dummies(features[ix_day], dtype=float)
+    elif isinstance(features, pd.DataFrame):
+        features = features.loc[ix_day, :].astype(float)
+    elif features.shape[0] != len(ix_day):
+        raise ValueError(
+            'features and model have different number of cells at ref_time'
+        )
+    traj = ad.AnnData(features)
+    traj_by_tp = {ref_time: traj.copy()}
+
+    # Get ancestor trajectories starting with ref_time.
+    ancestor_days = [tp for tp in ot_model.timepoints if tp <= ref_time]
+    ancestor_day_pairs = window(ancestor_days, k=2)
+    for t0, t1 in ancestor_day_pairs[::-1]:
+        traj = ot_model.pull_back(traj, t0, t1, normalize=True, norm_axis=1)
+        traj_by_tp[t0] = traj.copy()
+
+    # Get descendant trajectories starting with ref_time.
+    traj = traj_by_tp[ref_time]  # reset traj back to ref_time
+    descendant_days = [tp for tp in ot_model.timepoints if tp >= ref_time]
+    descendant_day_pairs = window(descendant_days, k=2)
+    for t0, t1 in descendant_day_pairs:
+        traj = ot_model.push_forward(traj, t0, t1, normalize=True, norm_axis=0)
+        traj_by_tp[t1] = traj.copy()
+
+    # Sort time points before concatenating, otherwise will be in order added.
+    traj_by_tp = {key: traj_by_tp[key] for key in sorted(traj_by_tp.keys())}
+    # Combine all trajectories into single SubsetTrajectory object
+    traj = TrajectoryExpectation(
+        ad.concat(
+            traj_by_tp.values(),
+            axis=0,
+            keys=traj_by_tp.keys(),
+            label=ot_model.time_var,
+        ),
+        ref_time=ref_time,
         time_var=ot_model.time_var
     )
     return traj

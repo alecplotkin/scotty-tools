@@ -1,1 +1,1 @@
-from scotty.models import trajectory
+from scotty.models import trajectory, featurize
