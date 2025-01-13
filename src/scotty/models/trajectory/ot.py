@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     import wot
     import moscot
 
+
 class BaseOTModel:
     """Container for various types of trajectory models."""
 
@@ -43,7 +44,9 @@ class BaseOTModel:
         if normalize:
             tmap.X = tmap.X / tmap.X.sum(norm_axis, keepdims=True)
         p1 = ad.AnnData(pd.DataFrame(
-            tmap.X.T @ p.X, columns=p.var_names, index=tmap.var_names
+            tmap[p.obs_names, :].X.T @ p.X,
+            columns=p.var_names,
+            index=tmap.var_names,
         ))
         return p1
 
@@ -59,7 +62,9 @@ class BaseOTModel:
         if normalize:
             tmap.X = tmap.X / tmap.X.sum(norm_axis, keepdims=True)
         p1 = ad.AnnData(pd.DataFrame(
-            tmap.X @ p.X, columns=p.var_names, index=tmap.obs_names
+            tmap[:, p.obs_names].X @ p.X,
+            columns=p.var_names,
+            index=tmap.obs_names,
         ))
         return p1
 
