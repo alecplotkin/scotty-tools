@@ -1,3 +1,3 @@
-from scotty.models.featurize.kernel_trajectory_featurization import KernelTrajectoryFeaturizer
+from scotty.models.featurize.trajectory_featurization import TrajectoryKMEFeaturizer, featurize_trajectories
 
-__all__ = ["KernelTrajectoryFeaturizer", ]
+__all__ = ['TrajectoryKMEFeaturizer', 'featurize_trajectories']
