@@ -5,10 +5,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Union, Literal, Dict, List, Tuple
-from scotty.models.trajectory import OTModel
-from scotty.utils import window
+from scrtt.models.trajectory import OTModel
+from scrtt.utils import window
 from ._flowplot import plot_flows
-# from src.pysankey.sankey import sankey
 
 
 def _calculate_entropy(x):

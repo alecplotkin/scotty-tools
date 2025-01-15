@@ -3,8 +3,8 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from typing import Tuple, Union, Literal, Iterable
-from scotty.models.trajectory import OTModel
-from scotty.utils import window, adjust_pvalues
+from scrtt.models.trajectory import OTModel
+from scrtt.utils import window, adjust_pvalues
 from itertools import combinations
 from scipy.stats import ttest_ind_from_stats
 from statsmodels.stats.multitest import multipletests

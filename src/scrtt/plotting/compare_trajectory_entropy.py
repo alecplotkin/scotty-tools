@@ -2,8 +2,8 @@ import pandas as pd
 import anndata as ad
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scotty.models.trajectory import OTModel
-from scotty.tools.metrics import compute_trajectory_entropy
+from scrtt.models.trajectory import OTModel
+from scrtt.tools.metrics import compute_trajectory_entropy
 from typing import List
 
 
