@@ -1,6 +1,7 @@
 import anndata as ad
 import numpy as np
 import pandas as pd
+from scipy.sparse import issparse
 from typing import (
         List,
         Dict,
@@ -8,6 +9,8 @@ from typing import (
         TypeVar,
         TYPE_CHECKING,
 )
+from scrtt.utils import window
+
 
 if TYPE_CHECKING:
     import wot
@@ -41,6 +44,8 @@ class BaseOTModel:
         norm_axis: int = None,
     ) -> ad.AnnData:
         tmap = self.get_coupling(t0, t1)
+        if issparse(tmap.X):
+            tmap.X = tmap.X.toarray()
         if normalize:
             tmap.X = tmap.X / tmap.X.sum(norm_axis, keepdims=True)
         p1 = ad.AnnData(pd.DataFrame(
@@ -59,6 +64,8 @@ class BaseOTModel:
         norm_axis: int = None,
     ) -> ad.AnnData:
         tmap = self.get_coupling(t0, t1)
+        if issparse(tmap.X):
+            tmap.X = tmap.X.toarray()
         if normalize:
             tmap.X = tmap.X / tmap.X.sum(norm_axis, keepdims=True)
         p1 = ad.AnnData(pd.DataFrame(
@@ -133,10 +140,10 @@ class GenericOTModel(BaseOTModel):
         self,
         tmaps: Dict[Tuple[float, float], ad.AnnData],
         meta: pd.DataFrame,
-        timepoints: List,
-        day_pairs: List,
         time_var: str,
     ):
+        timepoints = list(sorted(meta[time_var].unique()))
+        day_pairs = window(timepoints, 2)
         super().__init__(
             meta=meta,
             timepoints=timepoints,
