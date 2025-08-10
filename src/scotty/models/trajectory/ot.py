@@ -9,7 +9,7 @@ from typing import (
         TypeVar,
         TYPE_CHECKING,
 )
-from scrtt.utils import window
+from scotty.utils import window
 
 
 if TYPE_CHECKING:
