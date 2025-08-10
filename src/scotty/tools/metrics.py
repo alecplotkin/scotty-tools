@@ -3,8 +3,8 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from typing import Union, Literal, Dict
-from scrtt.models.trajectory import OTModel
-from scrtt.tools.trajectories import SubsetTrajectory
+from scotty.models.trajectory import OTModel
+from scotty.tools.trajectories import SubsetTrajectory
 
 
 def compute_cluster_entropy(df: pd.DataFrame) -> float:

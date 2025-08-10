@@ -1,5 +1,5 @@
-# scrtt
-Tools for downstream analysis of **s**ingle **c**ell **r**eal-**t**ime **t**rajectories.
+# scotty-tools
+Tools for **s**ingle **c**ell **o**ptimal-**t**ransport **t**rajector**y** models.
 
 This package implements methods for interfacing with trajectory models for time-resolved single-cell data. Some commonly used analysis frameworks in the field include:
 
@@ -14,7 +14,7 @@ Downstream analysis of single-cell real-time trajectories often involves tasks s
 # Installation
 
 ```
-pip install git+https://github.com/alecplotkin/scrtt
+pip install git+https://github.com/alecplotkin/scotty-tools
 ```
 
 # Quick start

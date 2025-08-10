@@ -1,6 +1,6 @@
 import scanpy as sc
 import pandas as pd
-import scrtt as sct
+import scotty as sct
 import matplotlib.pyplot as plt
 
 

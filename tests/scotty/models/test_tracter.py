@@ -1,6 +1,6 @@
 import pandas as pd
 import scanpy as sc
-import scrtt as sct
+import scotty as sct
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler

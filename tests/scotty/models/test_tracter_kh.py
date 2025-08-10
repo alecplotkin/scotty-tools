@@ -1,4 +1,4 @@
-import scrtt as sct
+import scotty as sct
 import scanpy as sc
 
 

@@ -1,4 +1,4 @@
-from scrtt.models.trajectory.ot import (
+from scotty.models.trajectory.ot import (
     MoscotModel,
     WOTModel,
     GenericOTModel,

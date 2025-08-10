@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import sys
-from scrtt.plotting._flowplot import plot_flows
+from scotty.plotting._flowplot import plot_flows
 
 
 def main():

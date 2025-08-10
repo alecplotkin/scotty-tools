@@ -4,8 +4,8 @@ import pandas as pd
 from typing import Dict, Literal, Union
 from tqdm import tqdm
 from sklearn.kernel_approximation import Nystroem, RBFSampler
-from scrtt.models.trajectory import OTModel
-from scrtt.tools.trajectories import compute_trajectory_expectation
+from scotty.models.trajectory import OTModel
+from scotty.tools.trajectories import compute_trajectory_expectation
 
 
 logger = logging.getLogger('kernel_trajectory_featurization')
