@@ -106,6 +106,40 @@ class MoscotModel(BaseOTModel):
         tmap.var_names = problem.adata_tgt.obs_names
         return tmap
 
+    def estimate_population_sizes(self, init_size: float = None, init_day: float = None, compartment_key: str = None, freqs: Dict = None):
+        adata = self.moscot_model.adata
+
+        if compartment_key is not None:
+            M = pd.get_dummies(adata.obs[compartment_key], dtype=float).to_numpy()
+        else:
+            M = np.ones((adata.shape[0], 1))
+
+        if init_day is None:
+            init_day = adata.obs[self.time_var].cat.categories.min()
+        if init_size is None:
+            init_size = adata[adata.obs[self.time_var] == init_day].shape[0]
+        if freqs is not None:
+            init_size = init_size * freqs[init_day]
+
+        pop_sizes = {init_day: init_size}
+        tp = self.moscot_model
+        masks = tp._policy.create_masks()
+        for day_pair in sorted(tp):
+            src_day, tgt_day = day_pair
+            problem = tp[day_pair]
+            src_masks, tgt_masks = masks[day_pair]
+
+            cell_weights = M[src_masks, :] / M[src_masks, :].sum(0, keepdims=True)
+            cell_growth = problem.prior_growth_rates ** problem.delta
+            pop_growth = np.dot(cell_growth, cell_weights)
+
+            tgt_size = np.nansum(pop_growth * pop_sizes[src_day])
+            if freqs is not None:
+                tgt_size = tgt_size * freqs[tgt_day]
+            pop_sizes[tgt_day] = tgt_size
+
+        return pop_sizes
+
 
 class WOTModel(BaseOTModel):
     """WOT trajectory model"""
