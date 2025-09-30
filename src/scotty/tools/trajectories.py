@@ -6,8 +6,8 @@ from typing import Tuple, Union, Literal, Iterable
 from scotty.models.trajectory import OTModel
 from scotty.utils import window, adjust_pvalues
 from itertools import combinations
-from scipy.stats import ttest_ind_from_stats
-from statsmodels.stats.multitest import multipletests
+from scipy.stats import ttest_ind_from_stats, pearsonr, spearmanr
+# from statsmodels.stats.multitest import multipletests
 
 
 class TrajectoryMixIn(ad.AnnData):
@@ -498,3 +498,39 @@ def compare_trajectory_means(traj1: GeneTrajectory, traj2: GeneTrajectory, log_b
     stats['padj'] = adjust_pvalues(stats['pval'], method='fdr_bh')
     stats['log2_fc'] = logfc['log2_fc']
     return stats
+
+
+def calculate_feature_correlation(
+    ot_model: OTModel,
+    adata: ad.AnnData,
+    source_day: float,
+    target_day: float,
+    method: Literal['pearson', 'spearman'] = 'pearson',
+    axis: Literal[0, 1] = 1,
+):
+    if method == 'pearson':
+        corr_fun = pearsonr
+    elif method == 'spearman':
+        corr_fun = spearmanr
+    else:
+        raise NotImplementedError(f"Correlation method {method} not implemented.")
+
+    tmap = ot_model.get_coupling(source_day, target_day)
+    tmap.X = tmap.X / tmap.X.sum(axis=axis, keepdims=True)
+
+    # Pullback measure
+    if axis == 1:
+        X = adata[tmap.obs_names].X
+        Y = tmap.X.dot(adata[tmap.var_names].X)
+
+    # Pushforward measure
+    elif axis == 0:
+        X = tmap.X.dot(adata[tmap.obs_names].X)
+        Y = adata[tmap.var_names].X
+
+    else:
+        raise ValueError("axis must either be 0 (pushforward) or 1 (pullback).")
+
+    corr = np.array([corr_fun(X[:, i], Y[:, i]) for i in range(X.shape[1])])
+    corr = pd.DataFrame(corr, index=adata.var_names, columns=['corr', 'pval'])
+    return corr
