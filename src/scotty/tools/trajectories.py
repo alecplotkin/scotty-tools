@@ -534,3 +534,16 @@ def calculate_feature_correlation(
     corr = np.array([corr_fun(X[:, i], Y[:, i]) for i in range(X.shape[1])])
     corr = pd.DataFrame(corr, index=adata.var_names, columns=['corr', 'pval'])
     return corr
+
+
+def compute_trajectory_entropy(ot_model: OTModel, subsets: Iterable) -> pd.DataFrame:
+    subsets = pd.get_dummies(subsets)
+    fates = dict()
+    for day_pair in ot_model.day_pairs:
+        tmap = ot_model.get_coupling(*day_pair)
+        tmap.X = tmap.X / tmap.X.sum(1, keepdims=True)
+        fates[day_pair] = tmap.to_df().dot(subsets.loc[tmap.var_names, :])
+    fates = pd.concat(fates.values(), keys=fates.keys(), names=['source_day', 'target_day'])
+    entropy = fates.apply(lambda x: -np.nansum(x * np.log(x)), axis=1)
+    entropy.name = 'entropy'
+    return entropy.reset_index(level=['source_day', 'target_day'])
