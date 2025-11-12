@@ -99,7 +99,7 @@ class Sankey:
             axn = plt.subplot(1, n_timepoints - 1, (stop, n_timepoints - 1))
             axn.axis('off')
 
-        plt.subplots_adjust(wspace=0, hspace=0)
+        plt.subplots_adjust(wspace=-endpoint_width, hspace=0)
         return fig
 
     def plot_sankey(
@@ -110,7 +110,7 @@ class Sankey:
             ax: plt.Axes = None,
             show_source_labels: bool = True,
             show_target_labels: bool = True,
-            endpoint_width: float = None,
+            endpoint_width: float = 0.05,
             endpoint_linewidth: float = None,
     ) -> plt.Axes:
         """Plot a single sankey facet"""
