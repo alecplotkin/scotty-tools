@@ -47,7 +47,9 @@ class BaseOTModel:
         if issparse(tmap.X):
             tmap.X = tmap.X.toarray()
         if normalize:
-            tmap.X = tmap.X / tmap.X.sum(norm_axis, keepdims=True)
+            tmap_sum = tmap.X.sum(norm_axis, keepdims=True)
+            tmap_sum[tmap_sum == 0] = 1e-9
+            tmap.X = tmap.X / tmap_sum
         p1 = ad.AnnData(pd.DataFrame(
             tmap[p.obs_names, :].X.T @ p.X,
             columns=p.var_names,
@@ -67,7 +69,9 @@ class BaseOTModel:
         if issparse(tmap.X):
             tmap.X = tmap.X.toarray()
         if normalize:
-            tmap.X = tmap.X / tmap.X.sum(norm_axis, keepdims=True)
+            tmap_sum = tmap.X.sum(norm_axis, keepdims=True)
+            tmap_sum[tmap_sum == 0] = 1e-9
+            tmap.X = tmap.X / tmap_sum
         p1 = ad.AnnData(pd.DataFrame(
             tmap[:, p.obs_names].X @ p.X,
             columns=p.var_names,
