@@ -24,6 +24,12 @@ dependencies = [
     'pandas',
 ]
 
+[project.optional-dependencies]
+examples = [
+    'moscot',
+    'jupyter',
+]
+
 [project.urls]
 'Homepage' = 'https://github.com/alecplotkin/scotty-tools'
 'Bug Tracker' = 'https://github.com/alecplotkin/scotty-tools/issues'

@@ -1,21 +1,15 @@
 # scotty-tools
 Tools for **s**ingle **c**ell **o**ptimal-**t**ransport **t**rajector**y** models.
 
-This package implements methods for interfacing with trajectory models for time-resolved single-cell data. Some commonly used analysis frameworks in the field include:
+This package implements methods for interfacing with optimal transport trajectory models for time-resolved single-cell data. Analysis tools in this package include:
 
-* Optimal transport (OT)
-* Normalizing flows (TODO)
-* Recurrent Neural Networks (TODO)
-
-So far, the functions in this module only interface with OT models, but I plan to add more soon.
-
-Downstream analysis of single-cell real-time trajectories often involves tasks such as estimating cell densities or computing expected values at specific time points given a starting population of cells. Models may implement these functions differently, or not at all. The goal of this package is to create a consistent API for common tasks in the downstream analysis of single-cell trajectories.
+* Visualization of "fate flows" via Sankey diagrams.
+* Trajectory Kernel Mean Embedding (TKME) integration.
+* Conditional fate probability computation.
+* Fate entropy computation.
 
 # Installation
 
 ```
 pip install git+https://github.com/alecplotkin/scotty-tools
 ```
-
-# Quick start
-TODO
