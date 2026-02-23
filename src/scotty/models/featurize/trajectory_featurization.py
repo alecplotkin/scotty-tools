@@ -1,8 +1,11 @@
 import logging
+import numpy as np
 import anndata as ad
 import pandas as pd
+
 from typing import Dict, Literal, Union
 from tqdm import tqdm
+from scipy.spatial import distance_matrix
 from sklearn.kernel_approximation import Nystroem, RBFSampler
 from scotty.models.trajectory import OTModel
 from scotty.tools.trajectories import compute_trajectory_expectation
@@ -23,7 +26,7 @@ class TrajectoryKMEFeaturizer:
     def __init__(
         self,
         embedding_size: int = 20,
-        gamma: float = 0.01,
+        gamma: float = None,
         random_state: int = None,
         embedding_model: Literal['Nystroem', 'RBFSampler'] = 'Nystroem',
     ):
@@ -63,9 +66,16 @@ class TrajectoryKMEFeaturizer:
         model_dict = dict()
         for time, df in tqdm(data.obs.groupby(self.time_var, observed=True)):
             X = data[df.index].obsm[use_rep]
+
+            gamma = self.gamma
+            if gamma is None:  # Use heuristic to determine optimal gamma.
+                D = distance_matrix(X, X)
+                sig = np.median(D[np.triu_indices_from(D, k=1)])
+                gamma = 1 / sig**2
+
             model = model_class(
                 n_components=self.embedding_size,
-                gamma=self.gamma,
+                gamma=gamma,
                 random_state=self.random_state,
             )
             model.fit(X)
