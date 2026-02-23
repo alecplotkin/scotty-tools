@@ -1,31 +1,55 @@
 import numpy as np
 import pandas as pd
+import pytest
 import matplotlib.pyplot as plt
-import sys
+
 from scotty.plotting._flowplot import plot_flows
 
 
-def main():
-    df = pd.DataFrame({
-        'source': 3*['A'] + 3*['B'] + 3*['C'],
-        'target': 3*['A', 'B', 'C'],
-        'outflow': np.arange(9) + 1,
-        'inflow': 0.8 * np.arange(9)[::-1] + 1,
+@pytest.fixture
+def flow_df():
+    sources = 3 * ['A'] + 3 * ['B'] + 3 * ['C']
+    targets = 3 * ['A', 'B', 'C']
+    outflows = np.arange(1, 10, dtype=float)
+    inflows = np.arange(9, 0, -1, dtype=float)
+    return pd.DataFrame({
+        'source': sources,
+        'target': targets,
+        'outflow': outflows,
+        'inflow': inflows,
     })
-    plot_flows(
-        sources=df['source'],
-        targets=df['target'],
-        outflows=df['outflow'],
-        inflows=df['inflow'],
-        # palette={'A': 'r', 'B': 'b', 'C': 'g'},
-        group_order=['C', 'A', 'B', ],
-        kernel_width=0.5,
-        flow_alpha=0.6,
-        endpoint_linewidth=2,
-        # endpoint_edgecolor=None,
+
+
+def test_plot_flows_returns_axes(flow_df):
+    ax = plot_flows(
+        sources=flow_df['source'],
+        targets=flow_df['target'],
+        outflows=flow_df['outflow'],
+        inflows=flow_df['inflow'],
     )
-    plt.show()
+    assert isinstance(ax, plt.Axes)
+    plt.close('all')
 
 
-if __name__ == '__main__':
-    sys.exit(main())
+def test_plot_flows_with_group_order(flow_df):
+    ax = plot_flows(
+        sources=flow_df['source'],
+        targets=flow_df['target'],
+        outflows=flow_df['outflow'],
+        inflows=flow_df['inflow'],
+        group_order=['C', 'A', 'B'],
+    )
+    assert isinstance(ax, plt.Axes)
+    plt.close('all')
+
+
+def test_plot_flows_with_threshold(flow_df):
+    ax = plot_flows(
+        sources=flow_df['source'],
+        targets=flow_df['target'],
+        outflows=flow_df['outflow'],
+        inflows=flow_df['inflow'],
+        min_flow_threshold=5.0,
+    )
+    assert isinstance(ax, plt.Axes)
+    plt.close('all')

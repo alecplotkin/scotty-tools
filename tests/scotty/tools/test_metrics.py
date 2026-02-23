@@ -1,50 +1,64 @@
 import numpy as np
 import pandas as pd
-import scanpy as sc
-import scotty as sct
-import matplotlib.pyplot as plt
-import seaborn as sns
+
+from scotty.tools.metrics import (
+    compute_cluster_entropy,
+    calculate_trajectory_divergence,
+    fate_consistency,
+)
 
 
-if __name__ == '__main__':
-    path_adata = 'data/experiments/GSE131847_spleen/gex.h5ad'
-    path_tmaps = 'data/experiments/GSE131847_spleen/tmaps/lambda1_5_growth_iters_1/'
-    path_sub1 = 'data/experiments/GSE131847_spleen/subsets/trajectory_clusters/20240717/subsets.csv'
-    path_sub2 = 'data/experiments/GSE131847_spleen/subsets/EEC_fates/GSE173512_GSE157072-lambda1_5_growth_iters_1/subsets.csv'
-    adata = sc.read_h5ad(path_adata)
-    ot_model = sct.models.trajectory.WOTModel.load(path_tmaps)
-    df_sub1 = pd.read_csv(path_sub1, index_col=0)
-    df_sub2 = pd.read_csv(path_sub2, index_col=0)
-    adata.obs = adata.obs.merge(df_sub1, how='left', left_index=True, right_index=True)
-    adata.obs = adata.obs.merge(df_sub2, how='left', left_index=True, right_index=True)
-    sc.tl.leiden(adata, resolution=1, key_added='leiden')
+def test_compute_cluster_entropy_uniform():
+    df = pd.DataFrame({
+        'A': [1.0, 0.0, 0.0],
+        'B': [0.0, 1.0, 0.0],
+        'C': [0.0, 0.0, 1.0],
+    })
+    result = compute_cluster_entropy(df)
+    np.testing.assert_allclose(result, np.log(3))
 
-    # groupings = [None, 'subset', 'trajectory_cluster', 'leiden']
-    groupings = ['subset', 'trajectory_cluster', 'leiden']
-    results = dict()
-    for grouping in groupings:
-        print(f'Calculating trajectory entropy for {grouping}')
-        if grouping is not None:
-            subsets = adata.obs[grouping]
-        else:
-            subsets = None
-        entropy_fwd = sct.tools.metrics.compute_trajectory_entropy(
-            ot_model, subsets=subsets, direction='forward'
-        ).rename('entropy_fwd')
-        entropy_bwd = sct.tools.metrics.compute_trajectory_entropy(
-            ot_model, subsets=subsets, direction='backward'
-        ).rename('entropy_bwd')
-        results[str(grouping)] = pd.merge(
-            entropy_fwd, entropy_bwd,
-            how='outer', left_index=True, right_index=True,
-        )
 
-    df = pd.concat(
-        results.values(), axis=0, keys=results.keys(), names=['grouping']
-    ).reset_index(level='grouping').merge(
-        adata.obs['day'], how='left', left_index=True, right_index=True
-    ).set_index('grouping', append=True)
-    sns.boxplot(df, x='day', hue='grouping', y='entropy_fwd')
-    plt.show()
-    sns.boxplot(df, x='day', hue='grouping', y='entropy_bwd')
-    plt.show()
+def test_compute_cluster_entropy_deterministic():
+    df = pd.DataFrame({
+        'A': [1.0, 1.0, 1.0],
+        'B': [0.0, 0.0, 0.0],
+        'C': [0.0, 0.0, 0.0],
+    })
+    result = compute_cluster_entropy(df)
+    assert result == 0.0
+
+
+def test_calculate_trajectory_divergence_js_returns_array(subset_trajectory):
+    divs = calculate_trajectory_divergence(subset_trajectory, 'A', 'B')
+    assert isinstance(divs, np.ndarray)
+    assert len(divs) == subset_trajectory.obs['day'].nunique()
+
+
+def test_calculate_trajectory_divergence_js_identical(subset_trajectory):
+    # At the reference day the distribution is one-hot (has exact zeros),
+    # which causes 0*log(0)=NaN in the KL formula. Ignore NaN and check the rest.
+    divs = calculate_trajectory_divergence(subset_trajectory, 'A', 'A')
+    np.testing.assert_allclose(np.nansum(divs), 0.0, atol=1e-10)
+
+
+def test_calculate_trajectory_divergence_js_nonneg(subset_trajectory):
+    divs = calculate_trajectory_divergence(subset_trajectory, 'A', 'B')
+    assert np.all((divs >= 0) | np.isnan(divs))
+
+
+def test_calculate_trajectory_divergence_tv_range(subset_trajectory):
+    divs = calculate_trajectory_divergence(
+        subset_trajectory, 'A', 'B', metric='total_variation'
+    )
+    assert (divs >= 0).all()
+    assert (divs <= 1).all()
+
+
+def test_fate_consistency_returns_series(ot_model, all_cell_subsets):
+    result = fate_consistency(ot_model, all_cell_subsets)
+    assert isinstance(result, pd.Series)
+
+
+def test_fate_consistency_at_most_one(ot_model, all_cell_subsets):
+    result = fate_consistency(ot_model, all_cell_subsets)
+    assert (result <= 1.0).all()

@@ -1,18 +1,42 @@
-import scanpy as sc
-import pandas as pd
-import scotty as sct
 import matplotlib.pyplot as plt
 
+from scotty.plotting.sankey import Sankey
 
-if __name__ == '__main__':
-    path_adata = 'data/experiments/GSE131847_spleen/gex.h5ad'
-    path_subsets = 'data/experiments/GSE131847_spleen/subsets/trajectory_clusters/20240717/subsets.csv'
-    path_tmaps = 'data/experiments/GSE131847_spleen/tmaps/lambda1_5_growth_iters_1/'
-    adata = sc.read_h5ad(path_adata)
-    df_subsets = pd.read_csv(path_subsets, index_col=0)
-    ot_model = sct.models.trajectory.WOTModel.load(path_tmaps)
 
-    sankey = sct.plotting.Sankey(ot_model, df_subsets['trajectory_cluster'])
-    sankey.plot_all_transitions()
-    plt.tight_layout()
-    plt.show()
+def test_sankey_init(ot_model, all_cell_subsets):
+    sankey = Sankey(ot_model, all_cell_subsets)
+    assert sankey is not None
+
+
+def test_calculate_flows_columns(ot_model, all_cell_subsets):
+    sankey = Sankey(ot_model, all_cell_subsets)
+    flow_df = sankey.calculate_flows(1.0, 2.0)
+    assert {'source', 'target', 'outflow', 'inflow'}.issubset(set(flow_df.columns))
+
+
+def test_calculate_flows_outflow_nonneg(ot_model, all_cell_subsets):
+    sankey = Sankey(ot_model, all_cell_subsets)
+    flow_df = sankey.calculate_flows(1.0, 2.0)
+    assert (flow_df['outflow'] >= 0).all()
+
+
+def test_calculate_flows_caching(ot_model, all_cell_subsets):
+    # calculate_flows always computes; the cache is populated for plot_sankey to reuse.
+    sankey = Sankey(ot_model, all_cell_subsets, cache_flow_dfs=True)
+    flow_df = sankey.calculate_flows(1.0, 2.0)
+    assert (1.0, 2.0) in sankey.flow_dfs
+    assert sankey.flow_dfs[(1.0, 2.0)] is flow_df
+
+
+def test_plot_sankey_returns_axes(ot_model, all_cell_subsets):
+    sankey = Sankey(ot_model, all_cell_subsets)
+    ax = sankey.plot_sankey(1.0, 2.0)
+    assert isinstance(ax, plt.Axes)
+    plt.close('all')
+
+
+def test_plot_all_transitions_returns_figure(ot_model, all_cell_subsets):
+    sankey = Sankey(ot_model, all_cell_subsets)
+    fig = sankey.plot_all_transitions()
+    assert isinstance(fig, plt.Figure)
+    plt.close('all')
