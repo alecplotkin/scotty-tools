@@ -40,7 +40,7 @@ class TemporalDifferentialExpression:
         time_levels = sorted(self.df[time_var].unique())
 
         df_x = self.df.loc[self.df[group_var] != group, :]
-        proportions = df_x.groupby(time_var)[group_var].value_counts(normalize=True)
+        proportions = df_x.groupby(time_var, observed=False)[group_var].value_counts(normalize=True)
 
         other_groups = [g for g in group_levels if g != group]
 
