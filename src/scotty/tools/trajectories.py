@@ -4,9 +4,8 @@ import numpy.typing as npt
 import pandas as pd
 from typing import Tuple, Union, Literal, Iterable
 from scotty.models.trajectory import OTModel
-from scotty.utils import window, adjust_pvalues
-from itertools import combinations
-from scipy.stats import ttest_ind_from_stats, pearsonr, spearmanr
+from scotty.utils import window
+from scipy.stats import pearsonr, spearmanr
 # from statsmodels.stats.multitest import multipletests
 
 
@@ -135,53 +134,6 @@ class GeneTrajectory(TrajectoryMixIn):
 
     def copy(self):
         return self.__copy__()
-
-    def compare_means(self, comparisons: Iterable = None, log_base: float = None) -> pd.DataFrame:
-        unique_subsets = self.obs[self.subset_var].unique()
-        if comparisons is None:
-            # Comparisons must be turned into a list, otherwise iterator will
-            # be exhausted after first inner for loop.
-            comparisons = list(combinations(unique_subsets, 2))
-        results = []
-        for day, df in self.obs.groupby(self.time_var):
-            for group1, group2 in comparisons:
-                ix1 = df.loc[df[self.subset_var] == group1, :].index
-                ix2 = df.loc[df[self.subset_var] == group2, :].index
-                mean1 = self[ix1].X.squeeze()
-                mean2 = self[ix2].X.squeeze()
-                std1 = self[ix1].layers['std'].squeeze()
-                std2 = self[ix2].layers['std'].squeeze()
-                nobs1 = self[ix1].obs['nobs'].to_numpy()
-                nobs2 = self[ix2].obs['nobs'].to_numpy()
-
-                # TODO: add check for if std error is 0
-                stats, pvals = ttest_ind_from_stats(
-                    mean1=mean1, std1=std1, nobs1=nobs1,
-                    mean2=mean2, std2=std2, nobs2=nobs2,
-                    equal_var=False, alternative='two-sided',
-                )
-                # Not sure if this is the cleanest way to accomplish this...
-                # Assume data is not log-transformed if log_base is None
-                if log_base is None:
-                    log2_fc = np.log2(mean1) - np.log2(mean2)
-                # Switch to log2 if data is log-transformed
-                else:
-                    log2_fc = (mean1 - mean2) / np.log2(log_base)
-
-                df_comp = pd.DataFrame({
-                    'gene': self.var_names,
-                    'day': day,
-                    'group1': group1,
-                    'group2': group2,
-                    't-statistic': stats,
-                    'pval': pvals,
-                    'log2_fc': log2_fc,
-                })
-                results.append(df_comp)
-        results = pd.concat(results, axis=0, ignore_index=True)
-        results['padj'] = adjust_pvalues(results['pval'], method='fdr_bh')
-        return results
-
 
     @staticmethod
     def from_subset_trajectory(
@@ -423,81 +375,6 @@ def compute_trajectory_expectation(
         time_var=ot_model.time_var
     )
     return traj
-
-
-def compute_subset_frequency_table(
-    ot_model: OTModel, subsets: pd.Series,
-) -> pd.DataFrame:
-    freqs = dict()
-    for i, ref_time in enumerate(ot_model.timepoints):
-        # Usually we're only interested in forecasting the frequencies
-        # into the future, since the frequencies into the past are constant
-        # (for now... until I can implement the correction for expected
-        # population size). However, we are calculating trajectories for all
-        # pairs of time points. This is very inefficient.
-        # TODO: implement method to compute only the necessary trajectories to
-        # forecast into the future.
-        traj = compute_trajectories(
-            ot_model,
-            subsets=subsets,
-            ref_time=ref_time,
-            normalize=True,
-            normalize_to_population_size=False,
-        )
-        # Not sure why, but the time_var is ending up as a pandas categorical.
-        # Probably something that's happening upstream in compute_trajectories.
-        time_dtype = type(ref_time)
-        traj.obs[traj.time_var] = traj.obs[traj.time_var].astype(time_dtype)
-        traj = traj[traj.obs[traj.time_var] >= ref_time]
-        df_traj = traj.to_df().join(traj.obs)
-        df_freq = df_traj.groupby(traj.time_var).sum().reset_index()
-        freqs[ref_time] = df_freq
-    freqs = pd.concat(
-        freqs.values(), axis=0, keys=freqs.keys(), names=['ref_time']
-    ).reset_index(level='ref_time')
-    freqs[ot_model.time_var] = freqs[ot_model.time_var].astype(time_dtype)
-    return freqs
-
-
-def _format_results_df(stats: npt.NDArray, value_name: str, traj1: GeneTrajectory, traj2: GeneTrajectory) -> pd.DataFrame:
-    meta = pd.DataFrame({
-        traj1.time_var: traj1.obs[traj1.time_var],
-        'group1': traj1.obs[traj1.subset_var],
-        'group2': traj2.obs[traj2.subset_var],
-    })
-    res = pd.DataFrame(stats, index=traj1.obs_names, columns=traj1.var_names)
-    res = res.join(meta).melt(id_vars=meta.columns, var_name='gene', value_name=value_name)
-    return res
-
-
-def compare_trajectory_means(traj1: GeneTrajectory, traj2: GeneTrajectory, log_base: float = None) -> pd.DataFrame:
-    # TODO: ensure that traj1 and traj2 are compatible, i.e. that genes and
-    # days match.
-    stats, pvals = ttest_ind_from_stats(
-        mean1=traj1.X,
-        std1=traj1.layers['std'],
-        nobs1=traj1.obs['nobs'].to_numpy().reshape(-1, 1),
-        mean2=traj2.X,
-        std2=traj2.layers['std'],
-        nobs2=traj2.obs['nobs'].to_numpy().reshape(-1, 1),
-        equal_var=False,
-        alternative='two-sided',
-    )
-    # Not sure if this is the cleanest way to accomplish this...
-    # Assume data is not log-transformed if log_base is None
-    if log_base is None:
-        logfc = np.log2(traj1.X) - np.log2(traj2.X)
-    # Switch to log2 if data is log-transformed
-    else:
-        logfc = (traj1.X - traj2.X) / np.log2(log_base)
-
-    stats = _format_results_df(stats, 't-statistic', traj1, traj2)
-    pvals = _format_results_df(pvals, 'pval', traj1, traj2)
-    logfc = _format_results_df(logfc, 'log2_fc', traj1, traj2)
-    stats['pval'] = pvals['pval']
-    stats['padj'] = adjust_pvalues(stats['pval'], method='fdr_bh')
-    stats['log2_fc'] = logfc['log2_fc']
-    return stats
 
 
 def calculate_feature_correlation(

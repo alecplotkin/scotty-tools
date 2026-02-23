@@ -4,8 +4,6 @@ from typing import Dict
 from scotty.tools.trajectories import GeneTrajectory
 
 
-# TODO: refactor so that we can plot trajectories with different groups of
-# time points.
 def plot_gene_trajectory(
         traj: GeneTrajectory,
         gene: str,
