@@ -1,15 +1,9 @@
 # %%
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
 import scanpy as sc
 import moscot as mt
 import scotty as sct
-
-from scipy.spatial import distance_matrix
-from sklearn.kernel_approximation import Nystroem
-from sklearn.metrics import adjusted_mutual_info_score
 
 # %%
 # %load_ext autoreload
@@ -23,32 +17,39 @@ This notebook will highlight some of the trajectory analysis tools included in `
 :
 
 * "Fate flow" visualization
+* Fate entropy analysis (TODO)
 * Trajectory integration and clustering
-* Fate entropy analysis
 """
 
 # %% [md]
 """
 # Dataset
 
-
+For this tutorial, we will use a dataset of differentiating hematopoietic stem cells collected at several timepoints from a single donor. Each cell has been labeled with its cell type based on prior biological knowledge (i.e. marker gene expression), giving us a ground-truth against which to compare our trajectory analysis.
 """
 
 # %%
 adata = mt.datasets.hspc()
 adata
 
-# %%
-sc.pl.embedding(adata, basis='umap_GEX', color='cell_type')
+# %% [md]
+"""
+Although the dataset includes both single-cell RNA and ATAC sequencing, we will only use the RNA gene expression (GEX) data for simplicity.
+"""
 
 # %%
-sc.pl.embedding(adata, basis='umap_GEX', color='day')
+sc.pl.embedding(adata, basis='umap_GEX', color=['cell_type', 'day'])
+
+# %% [md]
+"""
+We see that the cells form clusters based on cell type, and that each cell type is stratified by timepoint as well.
+"""
 
 # %% [md]
 """
 ## Fit trajectories using `moscot`
 
-First, we will fit optimal transport trajectories using the computational machinery built into `moscot`. In addition, we will check for outliers in predicted growth rates, and clip them to prevent trajectory collapse.
+First, we will fit optimal transport (OT) trajectories using the computational machinery built into `moscot`. In addition, we will check for outliers in predicted growth rates, and clip them to prevent trajectory collapse.
 
 We compute the prior growth rates from proliferation and apoptosis gene set scores and apply a scaling factor, $\sigma$, that determines how heavily the raw gene set scores impact the prior growth rates, via the formula:
 
@@ -134,7 +135,9 @@ We see good agreement between the prior and posterior growth rates.
 """
 ## Plot fate-flow Sankeys using `scotty-tools`
 
-We can visualize the differentiation relationships between cell types over time by using a Sankey diagram to summarize "fate flows":
+We can visualize the differentiation relationships between cell types over time by using a Sankey diagram to summarize "fate flows." This visualization represents the probabilities of cell transitions at consecutive timepoints through the sizes of the flows that connect clusters. We can further represent population expansion and contraction resulting from the aggregate effects of proliferation and apoptosis through the changing sizes of flows between timepoints.
+
+Let's look at fate flows between labeled cell types under OT:
 """
 
 # %%
@@ -144,28 +147,21 @@ sc.pl.embedding(adata, basis='umap_GEX', color='cell_type')
 
 # %% [md]
 """
-## Cluster trajectories using `scotty-tools`
+## Integrate timepoints using `scotty-tools`
+
+For timecourse datasets, we may be interested in finding time-invariant features of lineages. For example, we may want to find genes that stably identify lineages over time, rather than those which are transiently expressed. Or, we may want to cluster cells into distinct lineages based on their predicted trajectories.
+
+We can leverage our OT model to integrate across timepoints using a trajectory kernel mean embedding (TKME). This effectively integrates cells from distinct timepoints according to the OT model, by projecting cells into an embedding space shared across timepoints.
 """
 
 # %%
-gammas = dict()
-for day, df in adata.obs.groupby('day'):
-    X = adata[df.index].obsm['X_pca']
-    D = distance_matrix(X, X)
-    sig = np.median(D[np.triu_indices_from(D, k=1)])
-    gammas[day] = 1 / sig**2
+tkme = sct.models.featurize.TrajectoryKMEFeaturizer()
+X_tkme = tkme.fit_transform(ot_model, adata)
 
-print(gammas)
-
-
-# %%
-feats = dict()
-for day, df in adata.obs.groupby('day'):
-    phi = Nystroem(n_components=50, gamma=gammas[day], random_state=585)
-    X = phi.fit_transform(adata[df.index].obsm['X_pca'])
-    feats[day] = pd.DataFrame(X, index=df.index)
-
-X_tkme = sct.models.featurize.featurize_trajectories(feats, ot_model)
+# %% [md]
+"""
+We can treat the TKME features like any other transformation, adding them to our `adata` and performing dimensionality reduction.
+"""
 
 # %%
 adata.obsm['X_tkme'] = X_tkme[adata.obs_names].X
@@ -176,50 +172,47 @@ sc.tl.umap(adata, neighbors_key='neighbors_tkme', key_added='X_umap_TKME')
 # %%
 sc.pl.embedding(adata, basis='umap_TKME', color=['day', 'cell_type'])
 
+# %% [md]
+"""
+We can see that the TKME featurization effectively integrated cells across timepoints, while keeping distinct cell type lineages intact.
+"""
+
+# %% [md]
+"""
+## Cluster trajectories using `scotty-tools`
+
+One use for whole-trajectory embeddings is to perform clustering to identify major cell lineages. We will compare the results of Leiden clustering on both gene expression (GEX) as well as TKME to see how their trajectories differ.
+"""
+
 # %%
 sc.tl.leiden(adata, resolution=1, neighbors_key='neighbors', key_added='leiden_GEX')
 sc.tl.leiden(adata, resolution=1, neighbors_key='neighbors_tkme', key_added='leiden_TKME')
 
+print('Clusters visualized in GEX UMAP space:')
 sc.pl.embedding(adata, basis='umap_GEX', color=['cell_type', 'leiden_GEX', 'leiden_TKME'])
+print('Clusters visualized in TKME UMAP space:')
 sc.pl.embedding(adata, basis='umap_TKME', color=['cell_type', 'leiden_GEX', 'leiden_TKME'])
-
-# %%
-print(adjusted_mutual_info_score(adata.obs['cell_type'], adata.obs['leiden_GEX']))
-print(adjusted_mutual_info_score(adata.obs['cell_type'], adata.obs['leiden_TKME']))
-
-# %%
-sankey_leiden_gex = sct.plotting.Sankey(ot_model, adata.obs['leiden_GEX'])
-_ = sankey_leiden_gex.plot_all_transitions(min_flow_threshold=0.01)
-
-# %%
-sankey_leiden_tkme = sct.plotting.Sankey(ot_model, adata.obs['leiden_TKME'])
-_ = sankey_leiden_tkme.plot_all_transitions(min_flow_threshold=0.01)
 
 # %% [md]
 """
-## Quantify fate entropy using `scotty-tools`
+Both sets of clusters correspond quite well to the ground-truth cell types. This makes sense, since the gene expression information alone already does a good job of encoding lineage in this dataset without being confounded by time. 
+
+However, we can still see that the trajectory clusters provide us with a smoother picture of the differentiation process by comparing fate flows for both sets of clusters:
 """
 
 # %%
-df = sankey_cell_type.compute_flow_entropy()
-1 - df['expected'] / df['prior']
+print('GEX clusters:')
+sankey_leiden_gex = sct.plotting.Sankey(ot_model, adata.obs['leiden_GEX'])
+_ = sankey_leiden_gex.plot_all_transitions(min_flow_threshold=0.01)
+sc.pl.embedding(adata, basis='umap_GEX', color='leiden_GEX')
 
 # %%
-df = sankey_leiden_tkme.compute_flow_entropy()
-1 - df['expected'] / df['prior']
+print('TKME clusters:')
+sankey_leiden_tkme = sct.plotting.Sankey(ot_model, adata.obs['leiden_TKME'])
+_ = sankey_leiden_tkme.plot_all_transitions(min_flow_threshold=0.01)
+sc.pl.embedding(adata, basis='umap_TKME', color='leiden_TKME')
 
-# %%
-df = sankey_leiden_gex.compute_flow_entropy()
-1 - df['expected'] / df['prior']
-
-# %%
-subsettings = ['cell_type', 'leiden_GEX', 'leiden_TKME']
-consistency = dict()
-for sub in subsettings:
-    consistency[sub] = sct.tools.metrics.fate_consistency(ot_model, adata.obs[sub])
-
-consistency = pd.DataFrame(consistency).melt(var_name='subsetting', value_name='consistency')
-sns.violinplot(consistency, x='subsetting', y='consistency', hue='subsetting')
-plt.show()
-sns.boxplot(consistency, x='subsetting', y='consistency', hue='subsetting')
-plt.show()
+# %% [md]
+"""
+The trajectory clusters have much smoother flows, forming streamlines that cross-section the trajectory into distinct lineages.
+"""
