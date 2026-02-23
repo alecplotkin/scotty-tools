@@ -4,65 +4,35 @@ import numpy.typing as npt
 import pandas as pd
 from typing import Union, Literal, Dict
 from scotty.models.trajectory import OTModel
-from scotty.tools.trajectories import SubsetTrajectory
+from scotty.tools.trajectories import SubsetTrajectory, compute_trajectory_entropy
+
+
+def _entropy(x):
+    return -np.nansum(x * np.log(x))
+
+
+def fate_consistency(ot_model: OTModel, subsets: pd.Series) -> pd.Series:
+    fate_entropy = compute_trajectory_entropy(ot_model, subsets)
+
+    time_var = ot_model.time_var
+    freqs = ot_model.meta.join(subsets).groupby(time_var).value_counts(normalize=True)
+    null_entropy = freqs.reset_index().pivot(index=time_var, columns=subsets.name).apply(_entropy, axis=1)
+    null_entropy.name = 'null_entropy'
+
+    # return fate_entropy, null_entropy
+    fate_entropy = pd.merge(
+        fate_entropy,
+        null_entropy.reset_index().astype(float),
+        left_on=f'target_{time_var}',
+        right_on=time_var,
+    ).set_index(fate_entropy.index)
+    return 1 - fate_entropy['entropy'] / fate_entropy['null_entropy']
 
 
 def compute_cluster_entropy(df: pd.DataFrame) -> float:
     p = df.sum(axis=0) / df.shape[0]
     p = p[p != 0]
     return -np.sum(p * np.log(p))
-
-
-# TODO: Allow day_pair to be specified.
-def compute_trajectory_entropy(
-    ot_model: OTModel,
-    # day_pair: Tuple[float, float],
-    direction: Literal['forward', 'backward'] = 'forward',
-    subsets: Union[pd.Series, pd.DataFrame] = None,
-    compute_ratio: bool = True,
-) -> pd.Series:
-    """Compute trajectory entropy with respect to subsets."""
-
-    if subsets is not None:
-        if isinstance(subsets, pd.Series):
-            subsets = pd.get_dummies(subsets).astype(float)
-        elif isinstance(subsets, pd.DataFrame):
-            subsets = subsets.astype(float)
-        # AnnData will send a warning if var_names are not str.
-        subsets.columns = subsets.columns.astype(str)
-
-    if direction == 'forward':
-        traj_func = getattr(ot_model, 'pull_back')
-        ix_ref_t = 1
-    elif direction == 'backward':
-        traj_func = getattr(ot_model, 'push_forward')
-        ix_ref_t = 0
-    else:
-        raise ValueError('direction must be either forward or backward')
-
-    results = []
-    for day_pair in ot_model.day_pairs:
-        t_ref = day_pair[ix_ref_t]
-        ix_ = ot_model.meta.index[ot_model.meta[ot_model.time_var] == t_ref]
-        if subsets is not None:
-            s = ad.AnnData(subsets.loc[ix_, :])
-            s = s[:, s.X.sum(0) > 0]
-            traj = traj_func(s, *day_pair, normalize=False)
-        else:
-            traj = ot_model.get_coupling(*day_pair)
-            if direction == 'backward':
-                traj = traj.T
-
-        fates = traj.X / traj.X.sum(1, keepdims=True)
-        entropy = -np.sum(fates * np.log(fates), axis=1)
-        if compute_ratio:
-            growth = traj.X.sum(0)
-            weights = growth / growth.sum()
-            expected_entropy = -np.sum(weights * np.log(weights))
-            entropy = entropy / expected_entropy
-        results.append(pd.Series(entropy, index=traj.obs_names))
-    results = pd.concat(results, axis=0)
-    return results
 
 
 def calculate_trajectory_divergence(

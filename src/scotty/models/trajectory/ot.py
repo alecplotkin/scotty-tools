@@ -94,6 +94,65 @@ class MoscotModel(BaseOTModel):
             time_var=model.temporal_key,
         )
         self.moscot_model = model
+        self._base_initialized = True
+
+    @classmethod
+    def from_adata(cls, adata: ad.AnnData) -> "MoscotModel":
+        """Create an unfitted MoscotModel from raw AnnData.
+
+        Use the fluent API to prepare and solve before passing to other scotty functions:
+
+            ot_model = (
+                MoscotModel.from_adata(adata)
+                .score_genes_for_marginals(...)
+                .prepare(time_key='day', ...)
+                .clip_growth_rates(upper_quantile=0.95)
+                .solve(epsilon=0.01, ...)
+            )
+        """
+        from moscot.problems.time import TemporalProblem
+        instance = object.__new__(cls)
+        instance.moscot_model = TemporalProblem(adata)
+        instance._base_initialized = False
+        return instance
+
+    def _initialize_base(self):
+        model = self.moscot_model
+        meta = model.adata.obs[[model.temporal_key]]
+        self.meta = meta
+        self.timepoints = list(sorted(meta[model.temporal_key].unique()))
+        self.day_pairs = list(model.problems.keys())
+        self.time_var = model.temporal_key
+        self._base_initialized = True
+
+    def score_genes_for_marginals(self, **kwargs) -> "MoscotModel":
+        self.moscot_model.score_genes_for_marginals(**kwargs)
+        return self
+
+    def prepare(self, time_key: str, **kwargs) -> "MoscotModel":
+        self.moscot_model.prepare(time_key=time_key, **kwargs)
+        self._initialize_base()
+        return self
+
+    def clip_growth_rates(
+        self,
+        lower_quantile: float = 0.,
+        upper_quantile: float = 0.95,
+    ) -> "MoscotModel":
+        """Clip per-problem prior growth rates to the given quantile range."""
+        for day_pair in self.moscot_model:
+            problem = self.moscot_model[day_pair]
+            prior_growth = problem._prior_growth
+            lo = np.quantile(prior_growth, lower_quantile)
+            hi = np.quantile(prior_growth, upper_quantile)
+            clipped = np.clip(prior_growth, lo, hi)
+            problem._prior_growth = clipped
+            problem._a = clipped / clipped.sum()
+        return self
+
+    def solve(self, **kwargs) -> "MoscotModel":
+        self.moscot_model.solve(**kwargs)
+        return self
 
     @staticmethod
     def load(path) -> "MoscotModel":

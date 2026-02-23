@@ -28,6 +28,7 @@ dependencies = [
 examples = [
     'moscot',
     'jupyter',
+    'leidenalg',
 ]
 
 [project.urls]
