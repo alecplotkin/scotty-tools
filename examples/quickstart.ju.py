@@ -1,4 +1,5 @@
 # %%
+import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import scanpy as sc
@@ -17,13 +18,13 @@ This notebook will highlight some of the trajectory analysis tools included in `
 :
 
 * "Fate flow" visualization
-* Fate entropy analysis (TODO)
+* Fate entropy analysis
 * Trajectory integration and clustering
 """
 
 # %% [md]
 """
-# Dataset
+## Dataset
 
 For this tutorial, we will use a dataset of differentiating hematopoietic stem cells collected at several timepoints from a single donor. Each cell has been labeled with its cell type based on prior biological knowledge (i.e. marker gene expression), giving us a ground-truth against which to compare our trajectory analysis.
 """
@@ -133,7 +134,7 @@ We see good agreement between the prior and posterior growth rates.
 
 # %% [md]
 """
-## Plot fate-flow Sankeys using `scotty-tools`
+## Plot fate-flow Sankey diagrams
 
 We can visualize the differentiation relationships between cell types over time by using a Sankey diagram to summarize "fate flows." This visualization represents the probabilities of cell transitions at consecutive timepoints through the sizes of the flows that connect clusters. We can further represent population expansion and contraction resulting from the aggregate effects of proliferation and apoptosis through the changing sizes of flows between timepoints.
 
@@ -147,7 +148,23 @@ sc.pl.embedding(adata, basis='umap_GEX', color='cell_type')
 
 # %% [md]
 """
-## Integrate timepoints using `scotty-tools`
+## Calculate fate entropy
+
+Fate entropy measures how uncertain a cell's fate is with respect to a set of discrete labels: a cell with high entropy is predicted to transition to multiple labels with roughly equal probability, while a cell with low entropy has a more deterministic outcome. We can use `compute_trajectory_entropy` to compute this per-cell entropy with respect to the known cell types.
+"""
+
+# %%
+entropy_df = sct.tools.trajectories.compute_trajectory_entropy(ot_model, adata.obs['cell_type'])
+entropy_df = entropy_df.join(adata.obs['cell_type'])
+
+g = sns.FacetGrid(entropy_df, col='cell_type', hue='cell_type', col_wrap=4)
+g.map_dataframe(sns.boxplot, x='source_day', y='entropy')
+g.set_axis_labels('Source day', 'Fate entropy')
+plt.show()
+
+# %% [md]
+"""
+## Integrate timepoints using `TrajectoryKMEFeaturizer`
 
 For timecourse datasets, we may be interested in finding time-invariant features of lineages. For example, we may want to find genes that stably identify lineages over time, rather than those which are transiently expressed. Or, we may want to cluster cells into distinct lineages based on their predicted trajectories.
 
@@ -179,7 +196,7 @@ We can see that the TKME featurization effectively integrated cells across timep
 
 # %% [md]
 """
-## Cluster trajectories using `scotty-tools`
+## Cluster trajectories
 
 One use for whole-trajectory embeddings is to perform clustering to identify major cell lineages. We will compare the results of Leiden clustering on both gene expression (GEX) as well as TKME to see how their trajectories differ.
 """
