@@ -1,6 +1,8 @@
 import anndata as ad
+import json
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from scipy.sparse import issparse
 from typing import (
         List,
@@ -31,6 +33,33 @@ class BaseOTModel:
         self.timepoints = list(sorted(timepoints))
         self.day_pairs = list(sorted(day_pairs))
         self.time_var = time_var
+
+    @classmethod
+    def load(cls, path: str) -> "BaseOTModel":
+        raise NotImplementedError
+
+    def save(self, path: str) -> None:
+        """Save the model to a directory in a portable, pickle-independent format.
+
+        Saves each transport coupling as an h5ad file, the meta DataFrame as CSV,
+        and timepoint metadata as JSON. Can be reloaded with GenericOTModel.load(path).
+        """
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        for t0, t1 in self.day_pairs:
+            coupling = self.get_coupling(t0, t1)
+            coupling.write_h5ad(path / f"coupling_{t0}_{t1}.h5ad")
+
+        self.meta.to_csv(path / "meta.csv")
+
+        metadata = {
+            "time_var": self.time_var,
+            "timepoints": self.timepoints,
+            "day_pairs": [list(p) for p in self.day_pairs],
+        }
+        with open(path / "metadata.json", "w") as f:
+            json.dump(metadata, f)
 
     # TODO: create TransportMap class to be returned by get_coupling?
     def get_coupling(self, t0: float, t1: float) -> ad.AnnData: ...
@@ -248,6 +277,23 @@ class GenericOTModel(BaseOTModel):
             time_var=time_var,
         )
         self.tmaps = tmaps
+
+    @classmethod
+    def load(cls, path: str) -> "GenericOTModel":
+        """Load a GenericOTModel from a directory written by BaseOTModel.save()."""
+        path = Path(path)
+
+        with open(path / "metadata.json") as f:
+            metadata = json.load(f)
+
+        tmaps = {}
+        for t0, t1 in metadata["day_pairs"]:
+            coupling = ad.read_h5ad(path / f"coupling_{t0}_{t1}.h5ad")
+            tmaps[tuple([t0, t1])] = coupling
+
+        meta = pd.read_csv(path / "meta.csv", index_col=0)
+
+        return cls(tmaps=tmaps, meta=meta, time_var=metadata["time_var"])
 
     def get_coupling(self, t0: float, t1: float) -> ad.AnnData:
         return self.tmaps[(t0, t1)]
