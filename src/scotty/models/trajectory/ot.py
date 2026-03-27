@@ -8,6 +8,7 @@ from typing import (
         List,
         Dict,
         Tuple,
+        Literal,
         TypeVar,
         TYPE_CHECKING,
 )
@@ -126,7 +127,11 @@ class MoscotModel(BaseOTModel):
         self._base_initialized = True
 
     @classmethod
-    def from_adata(cls, adata: ad.AnnData) -> "MoscotModel":
+    def from_adata(
+        cls,
+        adata: ad.AnnData,
+        problem_type: Literal["temporal", "lineage"] = "temporal",
+    ) -> "MoscotModel":
         """Create an unfitted MoscotModel from raw AnnData.
 
         Use the fluent API to prepare and solve before passing to other scotty functions:
@@ -139,9 +144,14 @@ class MoscotModel(BaseOTModel):
                 .solve(epsilon=0.01, ...)
             )
         """
-        from moscot.problems.time import TemporalProblem
+        from moscot.problems.time import TemporalProblem, LineageProblem
         instance = object.__new__(cls)
-        instance.moscot_model = TemporalProblem(adata)
+        if problem_type == "temporal":
+            instance.moscot_model = TemporalProblem(adata)
+        elif problem_type == "lineage":
+            instance.moscot_model = LineageProblem(adata)
+        else:
+            raise ValueError("Unsupported problem type.")
         instance._base_initialized = False
         return instance
 
