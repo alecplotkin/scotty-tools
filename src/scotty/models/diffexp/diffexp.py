@@ -12,7 +12,7 @@ class TemporalDifferentialExpression:
         self.gene = gene
         self.group_var = group_var
         self.time_var = time_var
-        self.model = smf.ols(f'{gene} ~ C({group_var}) * C({time_var})', data=df)
+        self.model = smf.ols(f'Q("{gene}") ~ C({group_var}) * C({time_var})', data=df)
         self._is_fitted = False
         self.params = None
         self.param_names = None
