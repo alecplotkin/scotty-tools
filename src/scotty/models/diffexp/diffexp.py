@@ -100,16 +100,20 @@ def calculate_temporal_diff_exp(
     time_var: str,
     max_workers: int = 8,
 ) -> pd.DataFrame:
+    import multiprocessing
+    mp_ctx = multiprocessing.get_context('spawn')
     results = dict()
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_ctx) as executor:
+        future_to_feat = {}
         for feat in feature_vars:
             sub_df = df[[feat, group_var, time_var]].copy()
-            futures.append(executor.submit(_worker, sub_df, feat, group_var, time_var))
-        with tqdm(total=len(futures)) as pbar:
-            for future in as_completed(futures):
+            future = executor.submit(_worker, sub_df, feat, group_var, time_var)
+            future_to_feat[future] = feat
+        with tqdm(total=len(future_to_feat)) as pbar:
+            for future in as_completed(future_to_feat):
+                feat = future_to_feat[future]
                 try:
-                    feat, result = future.result()
+                    _, result = future.result()
                     results[feat] = result
                 except Exception as e:
                     print(f'{feat} generated an exception: {e}')

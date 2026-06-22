@@ -8,6 +8,7 @@ import pytest
 
 from scotty.models.trajectory.ot import GenericOTModel
 from scotty.tools.trajectories import compute_trajectories
+from scotty.tools.simulate import Clone, CloneForest, CloneTrajectory, standard_normal_init
 
 
 @pytest.fixture(scope='session')
@@ -71,3 +72,18 @@ def gene_adata(cell_ids, meta, rng):
     adata.obsm['X_pca'] = rng.random((n_cells, 10))
     adata.obs['day'] = meta.loc[all_cells, 'day'].values
     return adata
+
+
+@pytest.fixture
+def clone():
+    return Clone(parent=None, birth_time=0)
+
+
+@pytest.fixture
+def clone_forest():
+    return CloneForest(5)
+
+
+@pytest.fixture
+def clone_trajectory():
+    return CloneTrajectory(init_size=5, ndim=2, init_fun=standard_normal_init)
