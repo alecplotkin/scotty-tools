@@ -20,6 +20,33 @@ if TYPE_CHECKING:
     import moscot
 
 
+def _patch_anndata_file_backing_setstate() -> None:
+    """Make ``AnnDataFileManager.__setstate__`` tolerant of legacy pickles.
+
+    Models pickled with older anndata versions store the dereferenced AnnData
+    under the key ``_adata``, whereas anndata >= 0.11 expects ``_adata_ref``.
+    Unpickling such a file raises ``KeyError: '_adata_ref'``. This shim renames
+    the legacy key so old tmaps load under the current anndata. Idempotent.
+    """
+    import weakref
+    from anndata._core.file_backing import AnnDataFileManager
+
+    if getattr(AnnDataFileManager.__setstate__, "_scotty_compat", False):
+        return
+
+    def __setstate__(self, state):
+        state = dict(state)
+        adata = state.pop("_adata_ref", None)
+        if adata is None:
+            adata = state.pop("_adata", None)
+        self.__dict__ = state
+        self.__dict__["_adata_ref"] = weakref.ref(adata) if adata is not None else None
+        self.__dict__.setdefault("_file", None)
+
+    __setstate__._scotty_compat = True
+    AnnDataFileManager.__setstate__ = __setstate__
+
+
 class BaseOTModel:
     """Container for various types of trajectory models."""
 
@@ -196,6 +223,7 @@ class MoscotModel(BaseOTModel):
     @staticmethod
     def load(path) -> "MoscotModel":
         from moscot.problems import TemporalProblem
+        _patch_anndata_file_backing_setstate()
         return MoscotModel(TemporalProblem.load(path))
 
     # TODO: Override push_forward / pull_back behavior to use native push / pull methods.
