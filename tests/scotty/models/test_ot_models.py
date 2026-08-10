@@ -71,6 +71,69 @@ def test_pull_back_non_negative(ot_model, cell_ids):
     assert (result.X >= 0).all()
 
 
+def test_push_forward_does_not_mutate_coupling(unbalanced_ot_model, cell_ids):
+    before = unbalanced_ot_model.get_coupling(1.0, 2.0).X.copy()
+    unbalanced_ot_model.push_forward(_make_p(cell_ids[1.0]), 1.0, 2.0, norm_axis=1)
+    after = unbalanced_ot_model.get_coupling(1.0, 2.0).X
+    assert np.allclose(before, after)
+
+
+def test_pull_back_does_not_mutate_coupling(unbalanced_ot_model, cell_ids):
+    before = unbalanced_ot_model.get_coupling(1.0, 2.0).X.copy()
+    unbalanced_ot_model.pull_back(_make_p(cell_ids[2.0]), 1.0, 2.0, norm_axis=1)
+    after = unbalanced_ot_model.get_coupling(1.0, 2.0).X
+    assert np.allclose(before, after)
+
+
+def test_push_forward_repeatable(unbalanced_ot_model, cell_ids):
+    p = _make_p(cell_ids[1.0])
+    first = unbalanced_ot_model.push_forward(p, 1.0, 2.0, norm_axis=1).X.copy()
+    second = unbalanced_ot_model.push_forward(p, 1.0, 2.0, norm_axis=1).X
+    assert np.allclose(first, second)
+
+
+def test_push_forward_norm_axes_are_independent(unbalanced_ot_model, cell_ids):
+    """Pushing with one norm_axis must not change what the other norm_axis gives."""
+    p = _make_p(cell_ids[1.0])
+    expected = unbalanced_ot_model.push_forward(p, 1.0, 2.0, norm_axis=0).X.copy()
+    unbalanced_ot_model.push_forward(p, 1.0, 2.0, norm_axis=1)
+    after = unbalanced_ot_model.push_forward(p, 1.0, 2.0, norm_axis=0).X
+    assert np.allclose(expected, after)
+
+
+def test_push_forward_matches_row_stochastic_coupling(unbalanced_ot_model, cell_ids):
+    K = unbalanced_ot_model.get_coupling(1.0, 2.0).X.copy()
+    p = _make_p(cell_ids[1.0])
+    result = unbalanced_ot_model.push_forward(p, 1.0, 2.0, norm_axis=1)
+    expected = (K / K.sum(1, keepdims=True)).T @ p.X
+    assert np.allclose(result.X, expected)
+
+
+def test_pull_back_matches_column_stochastic_coupling(unbalanced_ot_model, cell_ids):
+    K = unbalanced_ot_model.get_coupling(1.0, 2.0).X.copy()
+    p = _make_p(cell_ids[2.0])
+    result = unbalanced_ot_model.pull_back(p, 1.0, 2.0, norm_axis=1)
+    expected = (K / K.sum(1, keepdims=True)) @ p.X
+    assert np.allclose(result.X, expected)
+
+
+def test_push_forward_honors_obs_name_order(unbalanced_ot_model, cell_ids):
+    """p may be ordered differently from the coupling's obs_names."""
+    p = _make_p(cell_ids[1.0])
+    shuffled = p[list(reversed(cell_ids[1.0])), :].copy()
+    shuffled.X = np.arange(shuffled.n_obs, dtype=float).reshape(-1, 1)
+    aligned = shuffled[cell_ids[1.0], :].copy()
+    a = unbalanced_ot_model.push_forward(shuffled, 1.0, 2.0, norm_axis=1)
+    b = unbalanced_ot_model.push_forward(aligned, 1.0, 2.0, norm_axis=1)
+    assert np.allclose(a.X, b.X)
+
+
+def test_push_forward_unknown_cell_raises(unbalanced_ot_model):
+    p = _make_p(['not_a_cell'])
+    with pytest.raises(KeyError):
+        unbalanced_ot_model.push_forward(p, 1.0, 2.0)
+
+
 @pytest.mark.xfail(
     strict=True,
     reason="known bug: coarsen_ot_model passes unexpected kwargs to GenericOTModel",

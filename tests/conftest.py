@@ -8,7 +8,19 @@ import pytest
 
 from scotty.models.trajectory.ot import GenericOTModel
 from scotty.tools.trajectories import compute_trajectories
-from scotty.tools.simulate import Clone, CloneForest, CloneTrajectory, standard_normal_init
+
+try:
+    from scotty.simulate.latents import (
+        Clone,
+        CloneForest,
+        CloneTrajectory,
+        standard_normal_init,
+    )
+except ImportError:
+    # The simulate module is absent on some branches (reverted in a740b2b).
+    # Skip its tests rather than failing collection for the whole suite.
+    Clone = CloneForest = CloneTrajectory = standard_normal_init = None
+    collect_ignore_glob = ['scotty/simulate/*']
 
 
 @pytest.fixture(scope='session')
@@ -41,6 +53,30 @@ def ot_model(rng, cell_ids, meta):
         src = cell_ids[t0]
         tgt = cell_ids[t1]
         tmap_x = rng.dirichlet(np.ones(len(tgt)), size=len(src))
+        tmap = ad.AnnData(tmap_x)
+        tmap.obs_names = src
+        tmap.var_names = tgt
+        tmaps[(t0, t1)] = tmap
+    return GenericOTModel(tmaps=tmaps, meta=meta, time_var='day')
+
+
+@pytest.fixture
+def unbalanced_ot_model(cell_ids, meta):
+    """OT model whose couplings have non-uniform row and column sums.
+
+    The `ot_model` fixture draws dirichlet rows, so every row sums to 1 and
+    row- vs column-normalization coincide up to a constant. Growth makes them
+    genuinely different, which is what most normalization bugs need to show up.
+    Function-scoped so mutation of the couplings cannot leak between tests.
+    """
+    rng = np.random.default_rng(7)
+    tmaps = {}
+    for t0, t1 in [(1.0, 2.0), (2.0, 3.0)]:
+        src, tgt = cell_ids[t0], cell_ids[t1]
+        tmap_x = rng.dirichlet(np.ones(len(tgt)), size=len(src))
+        growth = np.linspace(0.2, 3.0, len(src))[:, None]
+        tmap_x = tmap_x * growth
+        tmap_x = tmap_x / tmap_x.sum()
         tmap = ad.AnnData(tmap_x)
         tmap.obs_names = src
         tmap.var_names = tgt
