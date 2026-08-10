@@ -1,6 +1,7 @@
 import anndata as ad
 import json
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from pathlib import Path
 from scipy.sparse import issparse
@@ -65,6 +66,34 @@ class BaseOTModel:
     # TODO: create TransportMap class to be returned by get_coupling?
     def get_coupling(self, t0: float, t1: float) -> ad.AnnData: ...
 
+    @staticmethod
+    def _normalized_coupling(
+        tmap: ad.AnnData,
+        normalize: bool,
+        norm_axis: int,
+    ) -> npt.NDArray:
+        """Return the (optionally normalized) coupling matrix as a dense array.
+
+        Never writes back to ``tmap``: some models (e.g. GenericOTModel) return
+        the stored coupling itself from ``get_coupling``, so normalizing in
+        place would corrupt the model and make repeated pushes/pulls depend on
+        call order.
+        """
+        X = tmap.X.toarray() if issparse(tmap.X) else np.asarray(tmap.X)
+        if normalize:
+            tmap_sum = X.sum(norm_axis, keepdims=True)
+            X = X / np.where(tmap_sum == 0, 1e-9, tmap_sum)
+        return X
+
+    @staticmethod
+    def _get_indexer(names: pd.Index, wanted: pd.Index) -> npt.NDArray:
+        """Positional index of ``wanted`` within ``names``, erroring if absent."""
+        ix = names.get_indexer(wanted)
+        if (ix < 0).any():
+            missing = list(pd.Index(wanted)[ix < 0][:5])
+            raise KeyError(f'cells not found in transport map: {missing}')
+        return ix
+
     def push_forward(
         self,
         p: ad.AnnData,
@@ -74,14 +103,10 @@ class BaseOTModel:
         norm_axis: int = None,
     ) -> ad.AnnData:
         tmap = self.get_coupling(t0, t1)
-        if issparse(tmap.X):
-            tmap.X = tmap.X.toarray()
-        if normalize:
-            tmap_sum = tmap.X.sum(norm_axis, keepdims=True)
-            tmap_sum[tmap_sum == 0] = 1e-9
-            tmap.X = tmap.X / tmap_sum
+        X = self._normalized_coupling(tmap, normalize, norm_axis)
+        ix = self._get_indexer(tmap.obs_names, p.obs_names)
         p1 = ad.AnnData(pd.DataFrame(
-            tmap[p.obs_names, :].X.T @ p.X,
+            X[ix, :].T @ p.X,
             columns=p.var_names,
             index=tmap.var_names,
         ))
@@ -96,14 +121,10 @@ class BaseOTModel:
         norm_axis: int = None,
     ) -> ad.AnnData:
         tmap = self.get_coupling(t0, t1)
-        if issparse(tmap.X):
-            tmap.X = tmap.X.toarray()
-        if normalize:
-            tmap_sum = tmap.X.sum(norm_axis, keepdims=True)
-            tmap_sum[tmap_sum == 0] = 1e-9
-            tmap.X = tmap.X / tmap_sum
+        X = self._normalized_coupling(tmap, normalize, norm_axis)
+        ix = self._get_indexer(tmap.var_names, p.obs_names)
         p1 = ad.AnnData(pd.DataFrame(
-            tmap[:, p.obs_names].X @ p.X,
+            X[:, ix] @ p.X,
             columns=p.var_names,
             index=tmap.obs_names,
         ))

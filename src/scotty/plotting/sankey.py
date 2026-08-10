@@ -4,6 +4,7 @@ import numpy.typing as npt
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.special import xlogy
 from typing import Union, Literal, Dict, List, Tuple
 from scotty.models.trajectory import OTModel
 from scotty.utils import window
@@ -11,8 +12,14 @@ from ._flowplot import plot_flows
 
 
 def _calculate_entropy(x):
-    x /= x.sum()
-    return -np.sum(x * np.log(x))
+    # xlogy gives 0 * log(0) = 0, so exactly-zero flows contribute nothing
+    # rather than poisoning the whole group's entropy with nan.
+    p = np.asarray(x, dtype=float)
+    total = p.sum()
+    if total == 0:
+        return np.nan
+    p = p / total
+    return -np.sum(xlogy(p, p))
 
 
 def _expected_flow_entropy(flow_df, group_var, flow_var):
