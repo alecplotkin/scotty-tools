@@ -161,8 +161,11 @@ class BaseOTModel:
 class MoscotModel(BaseOTModel):
     """Moscot trajectory model"""
 
-    def __init__(self, model: 'moscot.problems.TemporalProblem'):
-        meta = model.adata.obs[[model.temporal_key]]
+    def __init__(self, model: 'moscot.problems.TemporalProblem', compartment_key: str | None = None):
+        meta_cols = [model.temporal_key]
+        if compartment_key is not None:
+            meta_cols.append(compartment_key)
+        meta = model.adata.obs[meta_cols]
         timepoints = list(sorted(meta[model.temporal_key].unique()))
         day_pairs = list(model.problems.keys())
         super().__init__(
@@ -171,6 +174,7 @@ class MoscotModel(BaseOTModel):
             day_pairs=day_pairs,
             time_var=model.temporal_key,
         )
+        self.compartment_key = compartment_key
         self.moscot_model = model
         self._base_initialized = True
 
@@ -179,6 +183,7 @@ class MoscotModel(BaseOTModel):
         cls,
         adata: ad.AnnData,
         problem_type: Literal["temporal", "lineage"] = "temporal",
+        compartment_key: str | None = None,
     ) -> "MoscotModel":
         """Create an unfitted MoscotModel from raw AnnData.
 
@@ -200,12 +205,18 @@ class MoscotModel(BaseOTModel):
             instance.moscot_model = LineageProblem(adata)
         else:
             raise ValueError("Unsupported problem type.")
+        instance.compartment_key = compartment_key
         instance._base_initialized = False
         return instance
 
     def _initialize_base(self):
         model = self.moscot_model
-        meta = model.adata.obs[[model.temporal_key]]
+        compartment_key = self.compartment_key
+        meta_cols = [model.temporal_key]
+        if compartment_key is not None:
+            meta_cols.append(compartment_key)
+        meta = model.adata.obs[meta_cols]
+
         self.meta = meta
         self.timepoints = list(sorted(meta[model.temporal_key].unique()))
         self.day_pairs = list(model.problems.keys())

@@ -91,6 +91,10 @@ def plot_flows(
     kernel /= kernel.sum()
 
     for ix, row in flow_df.iterrows():
+        # A None color marks a spacer group: it reserves vertical layout space
+        # (via the endpoint ranges computed above) but is never painted.
+        if color_dict.get(row['source']) is None:
+            continue
         if _check_min_flow_conditions(row, min_flow_threshold):
             alpha = min_flow_alpha
         else:
@@ -113,6 +117,8 @@ def plot_flows(
 
     # Plot endpoints.
     for source, (y0, y1) in source_ranges.items():
+        if color_dict.get(source) is None:
+            continue
         rect = patches.Rectangle(
             (-0.01, y0), endpoint_width + 0.01, y1 - y0,
             facecolor=color_dict[source],
@@ -122,6 +128,8 @@ def plot_flows(
         ax.add_patch(rect)
 
     for target, (y0, y1) in target_ranges.items():
+        if color_dict.get(target) is None:
+            continue
         rect = patches.Rectangle(
             (1 - endpoint_width, y0), endpoint_width + 0.01, y1 - y0,
             facecolor=color_dict[target],

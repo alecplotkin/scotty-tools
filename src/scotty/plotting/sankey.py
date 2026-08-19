@@ -129,7 +129,18 @@ class Sankey:
         else:
             flow_df = self.calculate_flows(t0, t1)
         # Get rid of populations with zero members to control visual clutter.
-        ix_null = (flow_df['outflow'] == 0) | (flow_df['inflow'] == 0)
+        # Spacer groups (color_dict[g] is None) are exempt: they reserve layout
+        # space without being drawn and may legitimately be zero on one side
+        # (e.g. a blank reserved on the source side only), so drop a spacer row
+        # only when it is zero on both sides.
+        spacer = (
+            flow_df['source'].map(lambda g: self.color_dict.get(g) is None)
+            | flow_df['target'].map(lambda g: self.color_dict.get(g) is None)
+        )
+        ix_null = (
+            (~spacer & ((flow_df['outflow'] == 0) | (flow_df['inflow'] == 0)))
+            | (spacer & (flow_df['outflow'] == 0) & (flow_df['inflow'] == 0))
+        )
         flow_df = flow_df.loc[~ix_null, :].reset_index()
 
         # # Need to put labels in specified order.
