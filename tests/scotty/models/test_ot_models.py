@@ -230,3 +230,215 @@ def test_save_creates_directory_if_missing(ot_model, tmp_path):
     ot_model.save(str(dest))
     assert dest.is_dir()
     assert (dest / "metadata.json").exists()
+
+
+# --- MoscotModel marginal adjustments -------------------------------------
+# Exercised through duck-typed stand-ins for moscot's problems, so the tests
+# neither solve an OT problem nor depend on moscot internals.
+
+import pandas as pd
+
+from scotty.models.trajectory.ot import MoscotModel
+
+
+class _FakeProblem:
+    """Minimal stand-in for moscot's BirthDeathProblem."""
+
+    def __init__(self, adata_src, adata_tgt, prior_growth):
+        self.adata_src = adata_src
+        self.adata_tgt = adata_tgt
+        self._prior_growth = np.asarray(prior_growth, dtype=float)
+        self._a = self._prior_growth / self._prior_growth.sum()
+        self._b = np.full(adata_tgt.n_obs, 1 / adata_tgt.n_obs)
+
+    @property
+    def a(self):
+        return self._a
+
+    @property
+    def b(self):
+        return self._b
+
+
+def _group_adata(groups):
+    """AnnData whose obs carries a 'compartment' column (values in `groups`)."""
+    groups = list(groups)
+    adata = ad.AnnData(np.zeros((len(groups), 1)))
+    adata.obs_names = [f'cell_{i}' for i in range(len(groups))]
+    adata.obs['compartment'] = pd.Categorical(groups)
+    return adata
+
+
+def _fake_moscot_model(problems):
+    model = MoscotModel.__new__(MoscotModel)
+    model.moscot_model = problems
+    model.compartment_key = 'compartment'
+    return model
+
+
+@pytest.fixture
+def growth_problem():
+    """One day pair; group A growth rates 1-5, group B growth rates 10-50."""
+    groups = ['A'] * 5 + ['B'] * 5
+    prior_growth = np.array([1., 2., 3., 4., 5., 10., 20., 30., 40., 50.])
+    adata = _group_adata(groups)
+    problem = _FakeProblem(adata, adata.copy(), prior_growth)
+    return _fake_moscot_model({(1.0, 2.0): problem}), problem
+
+
+def test_clip_growth_rates_ungrouped_uses_global_bounds(growth_problem):
+    model, problem = growth_problem
+    model.clip_growth_rates(upper_quantile=0.5)
+    # Global median of the 10 values is 7.5; every value above it is clipped.
+    assert problem._prior_growth.max() == pytest.approx(7.5)
+    assert problem._prior_growth[:5].tolist() == [1., 2., 3., 4., 5.]
+
+
+def test_clip_growth_rates_grouped_bounds_each_group(growth_problem):
+    model, problem = growth_problem
+    model.clip_growth_rates(upper_quantile=0.5, group_key='compartment')
+    clipped = problem._prior_growth
+    # Group A median is 3, group B median is 30: neither group is clipped
+    # against the other group's scale.
+    assert clipped[:5].max() == pytest.approx(3.)
+    assert clipped[5:].max() == pytest.approx(30.)
+    assert clipped[:5].min() == pytest.approx(1.)
+
+
+def test_clip_growth_rates_renormalizes_a(growth_problem):
+    model, problem = growth_problem
+    model.clip_growth_rates(upper_quantile=0.5, group_key='compartment')
+    assert problem._a.sum() == pytest.approx(1.)
+    assert np.allclose(problem._a, problem._prior_growth / problem._prior_growth.sum())
+
+
+@pytest.fixture
+def rescale_problem():
+    """Day pair with 5 'A' and 5 'B' cells on both sides (observed 50/50)."""
+    adata = _group_adata(['A'] * 5 + ['B'] * 5)
+    problem = _FakeProblem(adata, adata.copy(), np.ones(10))
+    return _fake_moscot_model({(1.0, 2.0): problem}), problem
+
+
+def test_rescale_marginals_hits_target_ratio(rescale_problem):
+    model, problem = rescale_problem
+    target = {1.0: {'A': 0.9, 'B': 0.1}, 2.0: {'A': 0.25, 'B': 0.75}}
+    model.rescale_marginals(target, group_key='compartment')
+    assert problem.a[:5].sum() == pytest.approx(0.9)
+    assert problem.a[5:].sum() == pytest.approx(0.1)
+    assert problem.b[:5].sum() == pytest.approx(0.25)
+    assert problem.b[5:].sum() == pytest.approx(0.75)
+
+
+def test_rescale_marginals_normalizes(rescale_problem):
+    model, problem = rescale_problem
+    model.rescale_marginals(
+        {1.0: {'A': 3., 'B': 1.}, 2.0: {'A': 1., 'B': 1.}}, group_key='compartment'
+    )
+    assert problem.a.sum() == pytest.approx(1.)
+    assert problem.b.sum() == pytest.approx(1.)
+    # Unnormalized frequencies are fine: only their ratio matters.
+    assert problem.a[:5].sum() == pytest.approx(0.75)
+
+
+def test_rescale_marginals_preserves_within_group_ratios():
+    adata = _group_adata(['A'] * 2 + ['B'] * 2)
+    problem = _FakeProblem(adata, adata.copy(), np.array([1., 3., 1., 1.]))
+    model = _fake_moscot_model({(1.0, 2.0): problem})
+    model.rescale_marginals(
+        {1.0: {'A': 0.5, 'B': 0.5}, 2.0: {'A': 0.5, 'B': 0.5}}, group_key='compartment'
+    )
+    assert problem.a[1] / problem.a[0] == pytest.approx(3.)
+
+
+def test_rescale_marginals_group_absent_at_timepoint():
+    """A compartment missing on one side (e.g. gut before day 4) is skipped."""
+    adata_src = _group_adata(['A'] * 4)
+    adata_tgt = _group_adata(['A'] * 2 + ['B'] * 2)
+    problem = _FakeProblem(adata_src, adata_tgt, np.ones(4))
+    model = _fake_moscot_model({(1.0, 2.0): problem})
+    model.rescale_marginals(
+        {1.0: {'A': 0.6, 'B': 0.4}, 2.0: {'A': 0.6, 'B': 0.4}}, group_key='compartment'
+    )
+    assert problem.a.sum() == pytest.approx(1.)
+    assert np.allclose(problem.a, 0.25)  # only group A present -> uniform
+    assert problem.b[:2].sum() == pytest.approx(0.6)
+
+
+def test_rescale_marginals_missing_timepoint_raises(rescale_problem):
+    model, _ = rescale_problem
+    with pytest.raises(KeyError, match='timepoint'):
+        model.rescale_marginals({1.0: {'A': 0.5, 'B': 0.5}}, group_key='compartment')
+
+
+def test_rescale_marginals_missing_group_raises(rescale_problem):
+    model, _ = rescale_problem
+    with pytest.raises(KeyError, match='missing groups'):
+        model.rescale_marginals(
+            {1.0: {'A': 1.0}, 2.0: {'A': 0.5, 'B': 0.5}}, group_key='compartment'
+        )
+
+
+def test_rescale_marginals_nonpositive_target_raises(rescale_problem):
+    model, _ = rescale_problem
+    with pytest.raises(ValueError, match='positive'):
+        model.rescale_marginals(
+            {1.0: {'A': 1.0, 'B': 0.0}, 2.0: {'A': 0.5, 'B': 0.5}},
+            group_key='compartment',
+        )
+
+
+@pytest.fixture
+def two_pair_growth_model():
+    """Two day pairs with different dt, so per-timepoint scaling is distinguishable."""
+    adata = _group_adata(['A'] * 4)
+    p1 = _FakeProblem(adata, adata.copy(), np.array([1., 2., 3., 4.]))
+    p2 = _FakeProblem(adata.copy(), adata.copy(), np.array([2., 4., 6., 8.]))
+    # dt = 1 and dt = 3 respectively.
+    return _fake_moscot_model({(0.0, 1.0): p1, (1.0, 4.0): p2}), p1, p2
+
+
+def test_set_death_rates_scales_prior_growth(two_pair_growth_model):
+    model, p1, p2 = two_pair_growth_model
+    before1, before2 = p1._prior_growth.copy(), p2._prior_growth.copy()
+    model.set_death_rates({0.0: 0.5, 1.0: 0.25})
+    # dt = 1 for the first pair, dt = 3 for the second.
+    np.testing.assert_allclose(p1._prior_growth, before1 * np.exp(-0.5 * 1))
+    np.testing.assert_allclose(p2._prior_growth, before2 * np.exp(-0.25 * 3))
+
+
+def test_set_death_rates_leaves_marginal_unchanged(two_pair_growth_model):
+    """The cancellation property: a constant rate cannot change the couplings."""
+    model, p1, p2 = two_pair_growth_model
+    a1_before, a2_before = p1.a.copy(), p2.a.copy()
+    model.set_death_rates({0.0: 0.5, 1.0: -1.5})
+    np.testing.assert_allclose(p1.a, a1_before)
+    np.testing.assert_allclose(p2.a, a2_before)
+
+
+def test_set_death_rates_marginal_stays_normalized(two_pair_growth_model):
+    model, p1, p2 = two_pair_growth_model
+    model.set_death_rates({0.0: 2.0, 1.0: 2.0})
+    assert p1.a.sum() == pytest.approx(1.0)
+    assert p2.a.sum() == pytest.approx(1.0)
+
+
+def test_set_death_rates_negative_rate_grows_population(two_pair_growth_model):
+    model, p1, _ = two_pair_growth_model
+    before = p1._prior_growth.copy()
+    model.set_death_rates({0.0: -0.5, 1.0: 0.0})
+    assert (p1._prior_growth > before).all()
+
+
+def test_set_death_rates_zero_is_identity(two_pair_growth_model):
+    model, p1, p2 = two_pair_growth_model
+    before1, before2 = p1._prior_growth.copy(), p2._prior_growth.copy()
+    model.set_death_rates({0.0: 0.0, 1.0: 0.0})
+    np.testing.assert_allclose(p1._prior_growth, before1)
+    np.testing.assert_allclose(p2._prior_growth, before2)
+
+
+def test_set_death_rates_missing_timepoint_raises(two_pair_growth_model):
+    model, _, _ = two_pair_growth_model
+    with pytest.raises(KeyError, match='1.0'):
+        model.set_death_rates({0.0: 0.5})

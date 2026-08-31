@@ -236,17 +236,157 @@ class MoscotModel(BaseOTModel):
         self,
         lower_quantile: float = 0.,
         upper_quantile: float = 0.95,
+        group_key: str | None = None,
     ) -> "MoscotModel":
-        """Clip per-problem prior growth rates to the given quantile range."""
+        """Clip per-problem prior growth rates to the given quantile range.
+
+        Parameters
+        ----------
+        lower_quantile, upper_quantile:
+            Quantiles of the prior growth rates used as clipping bounds.
+        group_key:
+            Column of ``problem.adata_src.obs`` defining groups of cells (e.g. a
+            tissue compartment). When given, the bounds are computed and applied
+            within each group, so a group whose growth rates are systematically
+            lower is not clipped against another group's outliers. When ``None``
+            (default) the bounds are computed over all source cells at once.
+        """
         for day_pair in self.moscot_model:
             problem = self.moscot_model[day_pair]
             prior_growth = problem._prior_growth
-            lo = np.quantile(prior_growth, lower_quantile)
-            hi = np.quantile(prior_growth, upper_quantile)
-            clipped = np.clip(prior_growth, lo, hi)
+            clipped = prior_growth.copy()
+            for ix in self._group_indices(problem.adata_src, group_key):
+                lo = np.quantile(prior_growth[ix], lower_quantile)
+                hi = np.quantile(prior_growth[ix], upper_quantile)
+                clipped[ix] = np.clip(prior_growth[ix], lo, hi)
             problem._prior_growth = clipped
             problem._a = clipped / clipped.sum()
         return self
+
+    def set_death_rates(self, rates: Dict[float, float]) -> "MoscotModel":
+        """Apply a per-timepoint death rate to the prior growth rates.
+
+        Multiplies each day pair's prior growth by ``exp(-rates[t0] * dt)``, i.e.
+        subtracts a constant ``rates[t0]`` from the log growth rate of every source
+        cell at ``t0``. Use it when the death rate is known at the population level
+        (e.g. from measured cell counts) but cannot be resolved per cell.
+
+        .. note::
+            A rate that is constant within a timepoint **does not change the
+            couplings**. ``exp(-rate * dt)`` is a common factor across the source
+            cells, and the source marginal is renormalized (``_a``), so it cancels
+            exactly. What it does change is :meth:`estimate_population_sizes` and
+            :attr:`prior_growth_rates`, which read the unnormalized
+            ``_prior_growth``. To make death affect the transport plan it has to
+            vary between cells.
+
+        Parameters
+        ----------
+        rates:
+            ``{source_timepoint: rate}`` in units of log growth per unit time.
+            Positive values shrink the population, negative values grow it. Every
+            source timepoint of the model must have an entry.
+
+        Returns
+        -------
+        Self, with ``_prior_growth`` scaled and ``_a`` renormalized.
+        """
+        missing = {t0 for t0, _ in self.moscot_model} - set(rates)
+        if missing:
+            raise KeyError(
+                f'No death rate given for source timepoint(s) {sorted(missing)}.'
+            )
+        for day_pair in self.moscot_model:
+            t0, t1 = day_pair
+            problem = self.moscot_model[day_pair]
+            scaled = problem._prior_growth * np.exp(-rates[t0] * (t1 - t0))
+            problem._prior_growth = scaled
+            problem._a = scaled / scaled.sum()
+        return self
+
+    def rescale_marginals(
+        self,
+        target_freqs: Dict[float, Dict[str, float]],
+        group_key: str,
+    ) -> "MoscotModel":
+        """Rescale marginals so cell groups carry reference amounts of mass.
+
+        The number of cells sampled from a group (e.g. a tissue compartment) at
+        a given timepoint reflects the experiment, not the size of that group in
+        the animal. This divides each cell's marginal weight by its group's
+        over-representation (observed cell frequency / reference frequency), so
+        that after renormalization every group carries the mass given by
+        ``target_freqs``.
+
+        Parameters
+        ----------
+        target_freqs:
+            ``{timepoint: {group: frequency}}``. Frequencies need not sum to one;
+            only their ratios within a timepoint matter. Every timepoint of the
+            model, and every group present at that timepoint, must have an entry.
+        group_key:
+            Column of ``adata.obs`` defining the groups.
+
+        Returns
+        -------
+        Self, with ``problem._a`` / ``problem._b`` rescaled and renormalized.
+        """
+        for day_pair in self.moscot_model:
+            problem = self.moscot_model[day_pair]
+            problem._a = self._rescale_marginal(
+                problem.a, problem.adata_src, target_freqs, day_pair[0], group_key
+            )
+            problem._b = self._rescale_marginal(
+                problem.b, problem.adata_tgt, target_freqs, day_pair[1], group_key
+            )
+        return self
+
+    @staticmethod
+    def _group_indices(adata: ad.AnnData, group_key: str | None) -> List[npt.NDArray]:
+        """Positional indices of each group of cells, or of all cells if no key."""
+        if group_key is None:
+            return [np.arange(adata.n_obs)]
+        return [
+            adata.obs_names.get_indexer(df.index)
+            for _, df in adata.obs.groupby(group_key, observed=True)
+        ]
+
+    @staticmethod
+    def _rescale_marginal(
+        marginal: npt.NDArray,
+        adata: ad.AnnData,
+        target_freqs: Dict[float, Dict[str, float]],
+        timepoint: float,
+        group_key: str,
+    ) -> npt.NDArray:
+        """Divide out group over-representation from one marginal; renormalize."""
+        if timepoint not in target_freqs:
+            raise KeyError(
+                f'target_freqs has no entry for timepoint {timepoint!r}; '
+                'provide reference frequencies for every timepoint of the model.'
+            )
+        targets = target_freqs[timepoint]
+        # Groups with no cells at this timepoint are simply not represented in
+        # the marginal (e.g. gut cells before they appear), so they are skipped.
+        obs_freqs = adata.obs[group_key].value_counts(normalize=True)
+        obs_freqs = obs_freqs[obs_freqs > 0]
+
+        missing = set(obs_freqs.index) - set(targets)
+        if missing:
+            raise KeyError(
+                f'target_freqs[{timepoint!r}] is missing groups {sorted(missing)}.'
+            )
+        nonpositive = [g for g in obs_freqs.index if targets[g] <= 0]
+        if nonpositive:
+            raise ValueError(
+                f'target_freqs[{timepoint!r}] must be positive for groups present '
+                f'in the data, got non-positive values for {sorted(nonpositive)}.'
+            )
+
+        scale = {g: freq / targets[g] for g, freq in obs_freqs.items()}
+        scale = adata.obs[group_key].map(scale).to_numpy(dtype=float)
+        rescaled = np.asarray(marginal, dtype=float) / scale
+        return rescaled / rescaled.sum()
 
     def solve(self, **kwargs) -> "MoscotModel":
         self.moscot_model.solve(**kwargs)
