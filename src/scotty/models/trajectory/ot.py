@@ -442,6 +442,86 @@ class MoscotModel(BaseOTModel):
 
         return pop_sizes
 
+    def estimate_population_sizes_by_group(
+        self,
+        group_key: str,
+        init_sizes: Dict[str, float],
+        init_day: float = None,
+    ) -> Dict[float, Dict[str, float]]:
+        """Propagate per-group population sizes through growth **and** migration.
+
+        A group's size changes both because its cells divide and die, and because cells move
+        between groups. This pushes each source cell's share of its group's population through the
+        row-stochastic coupling, weighted by that cell's prior growth, and re-aggregates by the
+        group of the *target* cell::
+
+            n_c(t1) = sum_{j in c} sum_i  w_i(t0) * g_i^dt * P(j|i)
+
+        where ``w_i(t0)`` is cell ``i``'s share of its group's population at ``t0`` and
+        ``P(j|i)`` is the coupling normalized over targets.
+
+        .. note::
+            This is not what :meth:`estimate_population_sizes` does with ``compartment_key``. That
+            method sums over groups (``np.nansum``) and, if ``freqs`` is given, redistributes the
+            total by those frequencies -- so the split between groups is an *input* rather than a
+            prediction. (Its ``freqs`` path also expects a per-day scalar, so the
+            ``{day: {group: frac}}`` produced by ``src.population_kinetics.fractions_at`` raises a
+            ``TypeError``.) Use this method when the split should be predicted and compared against
+            an independent measurement.
+
+        Parameters
+        ----------
+        group_key:
+            Column of ``adata.obs`` defining the groups, e.g. a tissue compartment.
+        init_sizes:
+            ``{group: size}`` at ``init_day``. Groups absent from the data at a timepoint simply
+            carry no mass.
+        init_day:
+            Timepoint the sizes refer to; defaults to the earliest.
+
+        Returns
+        -------
+        ``{timepoint: {group: size}}``.
+        """
+        adata = self.moscot_model.adata
+        if group_key not in adata.obs:
+            raise KeyError(f'No group column {group_key!r} in `adata.obs`.')
+
+        groups = list(adata.obs[group_key].astype(str).unique())
+        missing = set(init_sizes) - set(groups)
+        if missing:
+            raise KeyError(f'init_sizes names unknown group(s) {sorted(missing)}.')
+
+        if init_day is None:
+            init_day = min(t for pair in self.moscot_model for t in pair)
+
+        sizes = {init_day: {g: float(init_sizes.get(g, 0.0)) for g in groups}}
+        for day_pair in sorted(self.moscot_model):
+            src_day, tgt_day = day_pair
+            problem = self.moscot_model[day_pair]
+            src_obs = problem.adata_src.obs
+            src_groups = src_obs[group_key].astype(str)
+
+            # Each source cell carries its group's population, split evenly across the cells
+            # observed for that group, then scaled by its own growth over the interval.
+            counts = src_groups.value_counts()
+            per_cell = src_groups.map(
+                {g: sizes[src_day].get(g, 0.0) / counts[g] for g in counts.index}
+            ).to_numpy(dtype=float)
+            weights = per_cell * np.asarray(problem._prior_growth, dtype=float)
+
+            pushed = self.push_forward(
+                ad.AnnData(pd.DataFrame(weights[:, None], index=src_obs.index,
+                                        columns=['size'])),
+                src_day, tgt_day, normalize=True, norm_axis=1,
+            )
+            tgt_groups = problem.adata_tgt.obs[group_key].astype(str)
+            arrived = pd.Series(np.asarray(pushed.X).ravel(), index=pushed.obs_names)
+            by_group = arrived.groupby(tgt_groups.reindex(arrived.index)).sum()
+            sizes[tgt_day] = {g: float(by_group.get(g, 0.0)) for g in groups}
+
+        return sizes
+
 
 class WOTModel(BaseOTModel):
     """WOT trajectory model"""

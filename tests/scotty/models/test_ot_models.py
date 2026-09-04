@@ -442,3 +442,129 @@ def test_set_death_rates_missing_timepoint_raises(two_pair_growth_model):
     model, _, _ = two_pair_growth_model
     with pytest.raises(KeyError, match='1.0'):
         model.set_death_rates({0.0: 0.5})
+
+
+# --- estimate_population_sizes_by_group -------------------------------------
+
+class _FakeSolution:
+    def __init__(self, transport_matrix):
+        self.transport_matrix = transport_matrix
+
+
+class _FakeGrowthProblem(_FakeProblem):
+    """_FakeProblem plus the coupling that push_forward needs."""
+
+    def __init__(self, adata_src, adata_tgt, prior_growth, transport_matrix):
+        super().__init__(adata_src, adata_tgt, prior_growth)
+        self.solution = _FakeSolution(np.asarray(transport_matrix, dtype=float))
+
+
+def _group_model(problems, adata, group_key='compartment'):
+    model = MoscotModel.__new__(MoscotModel)
+
+    class _MM(dict):
+        pass
+
+    mm = _MM(problems)
+    mm.adata = adata
+    model.moscot_model = mm
+    model.compartment_key = group_key
+    return model
+
+
+def _two_group_adata(n_per_group=2, groups=('A', 'B')):
+    labels = [g for g in groups for _ in range(n_per_group)]
+    adata = ad.AnnData(np.zeros((len(labels), 1)))
+    adata.obs_names = [f'{g}{i}' for g in groups for i in range(n_per_group)]
+    adata.obs['compartment'] = pd.Categorical(labels)
+    return adata
+
+
+def _identity_coupling(n):
+    return np.eye(n)
+
+
+def _swap_coupling(n_per_group):
+    """Every A cell maps entirely to B cells and vice versa."""
+    n = 2 * n_per_group
+    T = np.zeros((n, n))
+    T[:n_per_group, n_per_group:] = 1.0 / n_per_group
+    T[n_per_group:, :n_per_group] = 1.0 / n_per_group
+    return T
+
+
+def test_by_group_identity_coupling_unit_growth_preserves_sizes():
+    adata = _two_group_adata()
+    prob = _FakeGrowthProblem(adata, adata.copy(), np.ones(4), _identity_coupling(4))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    sizes = model.estimate_population_sizes_by_group('compartment', {'A': 100.0, 'B': 25.0})
+    assert sizes[1.0]['A'] == pytest.approx(100.0)
+    assert sizes[1.0]['B'] == pytest.approx(25.0)
+
+
+def test_by_group_swap_coupling_exchanges_sizes():
+    adata = _two_group_adata()
+    prob = _FakeGrowthProblem(adata, adata.copy(), np.ones(4), _swap_coupling(2))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    sizes = model.estimate_population_sizes_by_group('compartment', {'A': 100.0, 'B': 25.0})
+    assert sizes[1.0]['A'] == pytest.approx(25.0)
+    assert sizes[1.0]['B'] == pytest.approx(100.0)
+
+
+def test_by_group_growth_scales_by_mean_prior_growth():
+    """_prior_growth is already g ** dt, so a group scales by its mean."""
+    adata = _two_group_adata()
+    growth = np.array([2.0, 4.0, 1.0, 1.0])       # A cells grow, B cells do not
+    prob = _FakeGrowthProblem(adata, adata.copy(), growth, _identity_coupling(4))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    sizes = model.estimate_population_sizes_by_group('compartment', {'A': 100.0, 'B': 40.0})
+    assert sizes[1.0]['A'] == pytest.approx(100.0 * 3.0)   # mean(2, 4) = 3
+    assert sizes[1.0]['B'] == pytest.approx(40.0)
+
+
+def test_by_group_records_initial_sizes_at_init_day():
+    adata = _two_group_adata()
+    prob = _FakeGrowthProblem(adata, adata.copy(), np.ones(4), _identity_coupling(4))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    sizes = model.estimate_population_sizes_by_group('compartment', {'A': 7.0, 'B': 3.0})
+    assert sizes[0.0] == pytest.approx({'A': 7.0, 'B': 3.0})
+
+
+def test_by_group_absent_group_carries_no_mass():
+    """A group with no cells at the source contributes nothing, without erroring."""
+    adata = _two_group_adata()
+    prob = _FakeGrowthProblem(adata, adata.copy(), np.ones(4), _identity_coupling(4))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    sizes = model.estimate_population_sizes_by_group('compartment', {'A': 100.0})
+    assert sizes[1.0]['A'] == pytest.approx(100.0)
+    assert sizes[1.0]['B'] == pytest.approx(0.0)
+
+
+def test_by_group_chains_across_day_pairs():
+    adata = _two_group_adata()
+    growth = np.array([2.0, 2.0, 1.0, 1.0])
+    problems = {
+        (0.0, 1.0): _FakeGrowthProblem(adata, adata.copy(), growth, _identity_coupling(4)),
+        (1.0, 2.0): _FakeGrowthProblem(adata.copy(), adata.copy(), growth,
+                                       _identity_coupling(4)),
+    }
+    model = _group_model(problems, adata)
+    sizes = model.estimate_population_sizes_by_group('compartment', {'A': 10.0, 'B': 10.0})
+    assert sizes[2.0]['A'] == pytest.approx(40.0)   # doubled twice
+    assert sizes[2.0]['B'] == pytest.approx(10.0)
+
+
+def test_by_group_unknown_group_key_raises():
+    adata = _two_group_adata()
+    prob = _FakeGrowthProblem(adata, adata.copy(), np.ones(4), _identity_coupling(4))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    with pytest.raises(KeyError, match='tissue'):
+        model.estimate_population_sizes_by_group('tissue', {'A': 1.0})
+
+
+def test_by_group_unknown_group_in_init_sizes_raises():
+    adata = _two_group_adata()
+    prob = _FakeGrowthProblem(adata, adata.copy(), np.ones(4), _identity_coupling(4))
+    model = _group_model({(0.0, 1.0): prob}, adata)
+    with pytest.raises(KeyError, match='C'):
+        model.estimate_population_sizes_by_group('compartment', {'A': 1.0, 'C': 1.0})
