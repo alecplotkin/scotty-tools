@@ -444,6 +444,123 @@ def test_set_death_rates_missing_timepoint_raises(two_pair_growth_model):
         model.set_death_rates({0.0: 0.5})
 
 
+# --- temper_growth_rates ----------------------------------------------------
+
+def _temper_model(prior_growth, adata=None, group_key=None):
+    """Single-day-pair model whose source cells carry `prior_growth`."""
+    prior_growth = np.asarray(prior_growth, dtype=float)
+    if adata is None:
+        adata = ad.AnnData(np.zeros((len(prior_growth), 1)))
+        adata.obs_names = [f'cell_{i}' for i in range(len(prior_growth))]
+    prob = _FakeProblem(adata, adata.copy(), prior_growth)
+    model = _group_model({(0.0, 1.0): prob}, adata, group_key=group_key)
+    return model, prob
+
+
+def test_temper_growth_rates_noop_when_spread_within_cap():
+    """The load-bearing property: short intervals must be left exactly alone."""
+    growth = np.exp(np.linspace(-1.0, 1.0, 50))  # log spread ~2.0
+    model, prob = _temper_model(growth)
+    before, a_before = prob._prior_growth.copy(), prob._a.copy()
+    model.temper_growth_rates(max_log_spread=8.0)
+    np.testing.assert_allclose(prob._prior_growth, before, rtol=0, atol=0)
+    np.testing.assert_allclose(prob._a, a_before, rtol=0, atol=0)
+
+
+def test_temper_growth_rates_caps_spread():
+    growth = np.exp(np.linspace(-10.0, 10.0, 201))  # log spread ~19.6 at p1-p99
+    model, prob = _temper_model(growth)
+    model.temper_growth_rates(max_log_spread=4.0)
+    L = np.log(prob._prior_growth)
+    lo, hi = np.quantile(L, (0.01, 0.99))
+    assert hi - lo == pytest.approx(4.0, rel=1e-6)
+
+
+def test_temper_growth_rates_preserves_mean_log_and_order():
+    rng = np.random.default_rng(0)
+    growth = np.exp(rng.normal(2.0, 5.0, 200))
+    model, prob = _temper_model(growth)
+    before = np.log(prob._prior_growth)
+    model.temper_growth_rates(max_log_spread=3.0)
+    after = np.log(prob._prior_growth)
+    assert after.mean() == pytest.approx(before.mean())
+    np.testing.assert_array_equal(np.argsort(before), np.argsort(after))
+
+
+def test_temper_growth_rates_shrinks_the_dominating_mean():
+    """The point of the method: a heavy upper tail stops carrying all the mass.
+
+    Mirrors the real day 60 -> 90 field: a per-day rate spread of a few percent
+    raised to dt = 30, where the top cells end up holding nearly all the mass.
+    """
+    rng = np.random.default_rng(1)
+    growth = np.exp(30 * rng.normal(-0.14, 0.12, 500))
+    model, prob = _temper_model(growth)
+    share_before = np.sort(prob._a)[-5:].sum()
+    assert share_before > 0.5, 'fixture should start out mass-dominated'
+    model.temper_growth_rates(max_log_spread=2.0)
+    assert np.sort(prob._a)[-5:].sum() < 0.1 * share_before
+
+
+def test_temper_growth_rates_ignores_tail_beyond_the_quantiles():
+    """Documented limit: a spread hidden outside [lq, uq] is not seen."""
+    growth = np.concatenate([np.full(99, 1.0), np.array([1e6])])
+    model, prob = _temper_model(growth)
+    before = prob._prior_growth.copy()
+    model.temper_growth_rates(max_log_spread=1.0, lower_quantile=0.01,
+                              upper_quantile=0.99)
+    np.testing.assert_allclose(prob._prior_growth, before)
+
+
+def test_temper_growth_rates_renormalizes_a():
+    model, prob = _temper_model(np.exp(np.linspace(-10.0, 10.0, 100)))
+    model.temper_growth_rates(max_log_spread=2.0)
+    assert prob._a.sum() == pytest.approx(1.0)
+    np.testing.assert_allclose(
+        prob._a, prob._prior_growth / prob._prior_growth.sum()
+    )
+
+
+def test_temper_growth_rates_groups_are_independent():
+    """A tight group is untouched even when the other group is tempered."""
+    adata = _two_group_adata(n_per_group=100)
+    tight = np.exp(np.linspace(-0.5, 0.5, 100))       # spread ~1.0
+    wide = np.exp(np.linspace(-10.0, 10.0, 100))      # spread ~19.6
+    growth = np.concatenate([tight, wide])
+    model, prob = _temper_model(growth, adata=adata, group_key='compartment')
+    model.temper_growth_rates(max_log_spread=4.0, group_key='compartment')
+    # Group A untouched up to the shared renormalization of _a.
+    ratio = prob._prior_growth[:100] / tight
+    np.testing.assert_allclose(ratio, ratio[0], rtol=1e-12)
+    assert ratio[0] == pytest.approx(1.0)
+    lo, hi = np.quantile(np.log(prob._prior_growth[100:]), (0.01, 0.99))
+    assert hi - lo == pytest.approx(4.0, rel=1e-6)
+
+
+def test_temper_growth_rates_rejects_nonpositive_cap():
+    model, _ = _temper_model(np.exp(np.linspace(-1.0, 1.0, 10)))
+    with pytest.raises(ValueError, match='max_log_spread'):
+        model.temper_growth_rates(max_log_spread=0.0)
+
+
+def test_temper_growth_rates_handles_degenerate_spread():
+    model, prob = _temper_model(np.full(10, 2.0))
+    model.temper_growth_rates(max_log_spread=1.0)
+    np.testing.assert_allclose(prob._prior_growth, np.full(10, 2.0))
+
+
+def test_growth_rate_log_spread_reports_per_group():
+    adata = _two_group_adata(n_per_group=100)
+    growth = np.concatenate([np.exp(np.linspace(-0.5, 0.5, 100)),
+                             np.exp(np.linspace(-10.0, 10.0, 100))])
+    model, _ = _temper_model(growth, adata=adata, group_key='compartment')
+    out = model.growth_rate_log_spread(group_key='compartment')
+    assert list(out['group']) == ['A', 'B']
+    assert out.loc[out['group'] == 'A', 'spread'].iloc[0] < 2.0
+    assert out.loc[out['group'] == 'B', 'spread'].iloc[0] > 15.0
+    assert list(out['n']) == [100, 100]
+
+
 # --- estimate_population_sizes_by_group -------------------------------------
 
 class _FakeSolution:

@@ -263,6 +263,121 @@ class MoscotModel(BaseOTModel):
             problem._a = clipped / clipped.sum()
         return self
 
+    def temper_growth_rates(
+        self,
+        max_log_spread: float = 8.0,
+        lower_quantile: float = 0.01,
+        upper_quantile: float = 0.99,
+        group_key: str | None = None,
+    ) -> "MoscotModel":
+        """Shrink the spread of the per-interval log growth field toward its mean.
+
+        ``problem._prior_growth`` is the growth factor for the whole interval,
+        ``exp((beta - delta) * dt)``, so its spread across cells grows with the
+        interval length. Over a long interval a per-cell growth field estimated
+        from a noisy expression score is amplified to many orders of magnitude,
+        and a handful of cells come to carry nearly all of the source mass. Every
+        quantity computed off the coupling then reflects those few cells: the
+        population estimate, the compartment split, and the migration rates.
+
+        This rescales the log growth field about its mean so that the
+        ``lower_quantile``-to-``upper_quantile`` spread is at most
+        ``max_log_spread``:
+
+        .. code-block:: text
+
+            L  = log(prior_growth)
+            s  = min(1, max_log_spread / (quantile(L, uq) - quantile(L, lq)))
+            L' = mean(L) + s * (L - mean(L))
+
+        Properties, which are the justification for using it:
+
+        - When the spread is already within ``max_log_spread``, ``s == 1`` and
+          the method is an **exact no-op**. Short intervals are therefore left
+          untouched and only the long ones are tempered.
+        - The **rank ordering** of cells and the **mean of log growth** (i.e. the
+          geometric mean of the growth factor) are preserved.
+        - ``mean(prior_growth)`` is deliberately *not* preserved -- that is the
+          quantity a heavy upper tail blows up, and the one being brought back
+          under control.
+        - Because ``_prior_growth`` is the per-interval factor, tempering it is
+          equivalent to tempering the per-day rate by the same ``s``; there is no
+          ``dt`` bookkeeping to get wrong.
+
+        Parameters
+        ----------
+        max_log_spread:
+            Maximum admissible spread of ``log(prior_growth)`` between the two
+            quantiles, i.e. ``log`` of the largest fold difference in growth
+            allowed between cells within one interval.
+        lower_quantile, upper_quantile:
+            Quantiles delimiting the spread that is measured. Defaults ignore the
+            extreme 1% at each end so a single outlier cannot set ``s``.
+        group_key:
+            Column of ``problem.adata_src.obs`` defining groups of cells (e.g. a
+            tissue compartment). When given, the spread is measured and the
+            shrinkage applied within each group, so one group's spread does not
+            set another's. When ``None`` (default) all source cells are tempered
+            together.
+
+        Returns
+        -------
+        Self, with ``problem._prior_growth`` tempered and ``problem._a``
+        renormalized.
+        """
+        if max_log_spread <= 0:
+            raise ValueError(
+                f'max_log_spread must be positive, got {max_log_spread!r}.'
+            )
+        for day_pair in self.moscot_model:
+            problem = self.moscot_model[day_pair]
+            prior_growth = np.asarray(problem._prior_growth, dtype=float)
+            tempered = prior_growth.copy()
+            for ix in self._group_indices(problem.adata_src, group_key):
+                log_growth = np.log(prior_growth[ix])
+                lo, hi = np.quantile(log_growth, (lower_quantile, upper_quantile))
+                spread = hi - lo
+                # A degenerate spread needs no tempering and would divide by zero.
+                scale = 1.0 if spread <= 0 else min(1.0, max_log_spread / spread)
+                if scale == 1.0:
+                    continue
+                mean = log_growth.mean()
+                tempered[ix] = np.exp(mean + scale * (log_growth - mean))
+            problem._prior_growth = tempered
+            problem._a = tempered / tempered.sum()
+        return self
+
+    def growth_rate_log_spread(
+        self,
+        lower_quantile: float = 0.01,
+        upper_quantile: float = 0.99,
+        group_key: str | None = None,
+    ) -> pd.DataFrame:
+        """Per-interval spread of the log growth field, for auditing tempering.
+
+        Returns one row per (day pair, group) with the quantile spread of
+        ``log(prior_growth)`` and the shrinkage ``temper_growth_rates`` would
+        apply at a given ``max_log_spread`` (reported as ``spread``; the caller
+        computes ``min(1, cap / spread)``).
+        """
+        rows = []
+        for day_pair in sorted(self.moscot_model):
+            problem = self.moscot_model[day_pair]
+            prior_growth = np.asarray(problem._prior_growth, dtype=float)
+            obs = problem.adata_src.obs
+            for ix in self._group_indices(problem.adata_src, group_key):
+                log_growth = np.log(prior_growth[ix])
+                lo, hi = np.quantile(log_growth, (lower_quantile, upper_quantile))
+                rows.append({
+                    't0': day_pair[0],
+                    't1': day_pair[1],
+                    'group': (str(obs[group_key].iloc[ix[0]])
+                              if group_key is not None else 'all'),
+                    'n': int(len(ix)),
+                    'spread': float(hi - lo),
+                    'fold_spread': float(np.exp(hi - lo)),
+                })
+        return pd.DataFrame(rows)
     def set_death_rates(self, rates: Dict[float, float]) -> "MoscotModel":
         """Apply a per-timepoint death rate to the prior growth rates.
 
